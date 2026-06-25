@@ -1,0 +1,14 @@
+{
+  "name": "wordpress-tutorial-video",
+  "version": "1.0.0",
+  "description": "Turn a WordPress documentation URL into a narrated, captioned tutorial video.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "playwright": ">=1.59.0"
+  }
+}

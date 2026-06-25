@@ -1,0 +1,34 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; height: 100%; }
+  body {
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    background: linear-gradient(135deg, #0b1f3a 0%, #11315e 100%);
+    color: #fff;
+    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    text-align: center;
+  }
+  .title {
+    font-size: 5.2vw; font-weight: 700; line-height: 1.15;
+    max-width: 80%; letter-spacing: -0.01em;
+  }
+  .subtitle {
+    margin-top: 2.2vh; font-size: 2.2vw; font-weight: 400;
+    color: #9fc0ff; max-width: 70%;
+  }
+  .accent {
+    margin-top: 4vh; width: 12vw; height: 0.5vh; border-radius: 999px;
+    background: #4f9dff;
+  }
+</style>
+</head>
+<body>
+  <div class="title">{{TITLE}}</div>
+  <div class="subtitle">{{SUBTITLE}}</div>
+  <div class="accent"></div>
+</body>
+</html>

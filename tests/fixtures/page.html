@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Mock Admin</title>
+<style>
+  body { margin: 0; font-family: -apple-system, Arial, sans-serif; }
+  #bar { background: #1d2327; color: #fff; height: 48px; display: flex; align-items: center; padding: 0 16px; }
+  #menu { background: #23282d; color: #fff; width: 200px; height: 100vh; position: fixed; top: 48px; }
+  #menu a { display: block; color: #eee; padding: 12px 16px; text-decoration: none; }
+  #menu a:hover { background: #0073aa; }
+  #content { margin-left: 220px; padding: 24px; }
+  #panel { display: none; border: 1px solid #ccc; border-radius: 8px; padding: 24px; max-width: 480px; }
+  #panel.show { display: block; }
+  .toggle { padding: 10px 16px; background: #2271b1; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+</style>
+</head>
+<body>
+  <div id="bar">Mock WordPress Admin</div>
+  <nav id="menu">
+    <a href="#" id="seo-menu">SEO</a>
+    <a href="#" id="sitemaps-link">Sitemaps</a>
+  </nav>
+  <div id="content">
+    <h1>Dashboard</h1>
+    <div id="panel">
+      <h2>Sitemap Settings</h2>
+      <p>Enable XML sitemaps for your site.</p>
+      <button class="toggle" id="enable-toggle">Enable Sitemap</button>
+    </div>
+  </div>
+  <script>
+    document.getElementById('sitemaps-link').addEventListener('click', (e) => {
+      e.preventDefault();
+      document.getElementById('panel').classList.add('show');
+    });
+    document.getElementById('enable-toggle').addEventListener('click', (e) => {
+      e.target.textContent = 'Sitemap Enabled ✓';
+      e.target.style.background = '#198754';
+    });
+  </script>
+</body>
+</html>
