@@ -43,15 +43,24 @@ def _make_raw_clip(path, seconds, res="640x360", fps=24):
         "-c:v", "libvpx", path], check=True)
 
 
-def _setup_run(tmp_path):
+def _setup_run(tmp_path, extra_cfg=None):
     run = str(tmp_path)
-    (tmp_path / "config.json").write_text(json.dumps(
-        {"resolution": "640x360", "fps": 24}))
+    cfg = {"resolution": "640x360", "fps": 24}
+    cfg.update(extra_cfg or {})
+    (tmp_path / "config.json").write_text(json.dumps(cfg))
     (tmp_path / "script.json").write_text(json.dumps(SCRIPT))
     # audio + durations via stub TTS
     subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "tts_kokoro.py"),
                     "--run-dir", run, "--engine", "stub"], check=True)
     return run
+
+
+def _probe_dims(path):
+    out = subprocess.check_output([
+        "ffprobe", "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=width,height", "-of", "csv=p=0", str(path)])
+    w, h = out.decode().strip().split(",")[:2]
+    return int(w), int(h)
 
 
 def test_postprocess_pads_to_narration(tmp_path):
@@ -64,6 +73,27 @@ def test_postprocess_pads_to_narration(tmp_path):
     final = os.path.join(run, "clips", "01.final.mp4")
     assert os.path.exists(final)
     assert _ffprobe_dur(final) >= durations["01"] - 0.15
+
+
+def test_postprocess_downscales_master_and_zooms_focus(tmp_path):
+    run = _setup_run(tmp_path)
+    # 2x master raw (1280x720) of the 640x360 delivery resolution
+    _make_raw_clip(os.path.join(run, "clips", "01.raw.webm"), seconds=2, res="1280x720")
+    (tmp_path / "clips" / "01.focus.json").write_text(json.dumps(
+        {"box": {"x": 500, "y": 250, "width": 100, "height": 60},
+         "viewport": {"width": 640, "height": 360}, "scale": 2}))
+    subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "postprocess_clip.py"),
+                    "--run-dir", run, "--scene-id", "01", "--zoom"], check=True)
+    assert _probe_dims(os.path.join(run, "clips", "01.final.mp4")) == (640, 360)
+
+
+def test_postprocess_writes_4k_variant(tmp_path):
+    run = _setup_run(tmp_path, extra_cfg={"deliver_4k": True, "capture_scale": 2})
+    _make_raw_clip(os.path.join(run, "clips", "01.raw.webm"), seconds=1, res="1280x720")
+    subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "postprocess_clip.py"),
+                    "--run-dir", run, "--scene-id", "01"], check=True)
+    assert (tmp_path / "clips" / "01.final.mp4").exists()
+    assert _probe_dims(os.path.join(run, "clips", "01.final-4k.mp4")) == (1280, 720)
 
 
 def test_full_compose_chain(tmp_path):
