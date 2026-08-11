@@ -1,0 +1,21 @@
+name: ci
+on:
+  push: {branches: [main]}
+  pull_request: {}
+jobs:
+  test:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: 22}
+      - name: Install ffmpeg
+        run: brew install ffmpeg
+      - name: Python tests (stub engines; no ML deps needed)
+        run: python3 -m pytest -q
+      - name: Node deps + Chromium
+        run: |
+          npm install
+          npx playwright install chromium --with-deps
+      - name: Recorder fixture test
+        run: node tests/test_record_scene.mjs
