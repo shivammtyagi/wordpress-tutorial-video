@@ -35,6 +35,14 @@ else
   run "brew install ffmpeg"
 fi
 
+# 2b. espeak-ng (Kokoro OOV fallback — REQUIRED; without it unknown words are silently skipped)
+if command -v espeak-ng >/dev/null 2>&1; then
+  say "espeak-ng present — skipping."
+else
+  say "Installing espeak-ng via Homebrew."
+  run "brew install espeak-ng"
+fi
+
 # 3. uv (Python package/venv manager)
 if command -v uv >/dev/null 2>&1; then
   say "uv present — skipping."
@@ -50,8 +58,9 @@ else
   say "Creating venv at $VENV (Python 3.11 recommended for ML wheels)."
   run "uv venv --python 3.11 \"$VENV\""
 fi
-say "Installing kokoro, soundfile, whisperx into venv."
-run "uv pip install --python \"$VENV/bin/python\" kokoro soundfile whisperx"
+say "Installing pinned kokoro + whisperx (+ spaCy model) into venv."
+run "uv pip install --python \"$VENV/bin/python\" 'kokoro>=0.9.4,<1' soundfile 'whisperx>=3.8.6'"
+run "uv pip install --python \"$VENV/bin/python\" 'en_core_web_sm@https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl'"
 
 # 5. Playwright >= 1.59 (installed LOCALLY so `import 'playwright'` resolves
 #    for record_scene.mjs and render_card.mjs) + Chromium browser.
@@ -60,4 +69,4 @@ run "cd \"$HERE\" && npm install"
 run "cd \"$HERE\" && npx playwright install chromium"
 
 echo ""
-say "Done. Run scripts/check_env.sh to confirm."
+say "Done. Run scripts/check_env.sh (add --deep for the TTS/alignment self-test)."
