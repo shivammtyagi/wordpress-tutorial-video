@@ -49,3 +49,53 @@ def test_discovered_valid_when_filled():
     good["scenes"][0]["actions"][0]["selector"] = "role=menuitem[name='Menu']"
     good["scenes"][0]["focus_selector"] = "#panel"
     assert schema.validate_script(good, discovered=True) == []
+
+
+def _valid_scene():
+    return {
+        "id": "01", "narration": "Open the menu.", "intent": "Open menu",
+        "actions": [{"type": "click", "target": "Menu", "selector": "role=link[name='Menu']",
+                     "highlight": False}],
+        "focus_selector": "#main", "hold_after_ms": 500,
+        "verify": {"expect_on_screen": "The menu page"},
+    }
+
+
+def _valid_script(scene):
+    return {"title": "T", "resolution": "1920x1080", "fps": 30, "voice": "af_heart",
+            "scenes": [scene]}
+
+
+def test_phase_accepts_setup_and_recorded():
+    sc = _valid_scene()
+    sc["actions"][0]["phase"] = "setup"
+    assert schema.validate_script(_valid_script(sc), discovered=True) == []
+    sc["actions"][0]["phase"] = "recorded"
+    assert schema.validate_script(_valid_script(sc), discovered=True) == []
+
+
+def test_phase_rejects_unknown_value():
+    sc = _valid_scene()
+    sc["actions"][0]["phase"] = "hidden"
+    errs = schema.validate_script(_valid_script(sc), discovered=True)
+    assert any("phase" in e for e in errs)
+
+
+def test_cue_must_be_nonempty_string_when_present():
+    sc = _valid_scene()
+    sc["actions"][0]["cue"] = ""
+    errs = schema.validate_script(_valid_script(sc), discovered=False)
+    assert any("cue" in e for e in errs)
+
+
+def test_goto_and_wait_need_no_selector_after_discovery():
+    sc = _valid_scene()
+    sc["actions"] = [
+        {"type": "goto", "target": "/wp-admin/admin.php?page=x", "selector": None,
+         "highlight": False, "phase": "setup"},
+        {"type": "wait", "target": "settle", "text": "500", "selector": None,
+         "highlight": False},
+        {"type": "click", "target": "Menu", "selector": "role=link[name='Menu']",
+         "highlight": True},
+    ]
+    assert schema.validate_script(_valid_script(sc), discovered=True) == []

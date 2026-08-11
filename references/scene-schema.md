@@ -43,8 +43,11 @@ Recording reads **only** `script.discovered.json`.
 | `selector` | string\|null | Verified Playwright selector. Resolved during discovery. |
 | `text` | string | Required when `type == "type"` (text to type) or `wait` (ms). |
 | `highlight` | bool | When true, draw a callout box around the element before clicking. |
+| `phase` | enum | `"setup"` (runs before recording starts: login already done, navigation, cleanup) or `"recorded"` (default; runs on camera). The delivered clip never shows setup actions. |
+| `cue` | string | Optional word/phrase from this scene's `narration`. The recorder fires the action when that word is spoken (per-scene word offsets from the audio gate). Omit for sequential pacing. |
 
 `goto` uses `target` as a site-relative path (e.g. `/wp-admin/admin.php?page=...`).
+`goto` and `wait` actions never need selectors, even post-discovery.
 
 ## Critical constraint: each scene starts from a fresh browser
 
@@ -53,6 +56,11 @@ be re-recorded during the auto-fix loop. **Each scene's `actions` must navigate
 from a known entry point** (a fresh `wp-admin`, or an explicit `goto`) to the
 state the narration describes. Do not assume state left behind by a previous
 scene. If two steps must share live state, put them in the same scene.
+
+**Narrate-then-act rule.** Narration should lead the action it describes. Put
+navigation into `phase: "setup"` so the clip opens on the scene's starting state,
+and use `cue` so clicks land on the words describing them ("…click **Save
+Changes**" → `cue: "Save Changes"`).
 
 ## Annotated example
 

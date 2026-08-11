@@ -67,7 +67,13 @@ def validate_script(obj, discovered=False):
                     errors.append(f"{aloc}.target: required human-language description")
                 if ac.get("type") == "type" and not ac.get("text"):
                     errors.append(f"{aloc}.text: required when type=='type'")
-                if discovered and not ac.get("selector"):
+                phase = ac.get("phase", "recorded")
+                if phase not in ("setup", "recorded"):
+                    errors.append(f"{aloc}.phase: must be 'setup' or 'recorded'")
+                if "cue" in ac and (not isinstance(ac["cue"], str) or not ac["cue"].strip()):
+                    errors.append(f"{aloc}.cue: must be a non-empty string when present")
+                if (discovered and ac.get("type") not in ("goto", "wait")
+                        and not ac.get("selector")):
                     errors.append(f"{aloc}.selector: must be resolved (non-null) after discovery")
 
         if discovered and not sc.get("focus_selector"):
