@@ -12,20 +12,41 @@ affordances:
 
 | Call | Effect |
 |------|--------|
-| `screencast.start({path, size, quality})` | Record to WebM; `quality` 0–100 (we use 90); `size` is the **master** resolution (delivery × `capture_scale`). |
-| `screencast.showActions({cursor:'pointer', duration})` | Animated mouse pointer that glides between action points + an action title overlay. |
-| `screencast.showOverlay(html, {duration})` | Inject a `pointer-events:none` callout (we draw a highlight box around `highlight: true` clicks). |
+| `screencast.start({path, size, quality})` | Record to WebM; `quality` 0–100 (we use 90); `size` is the **master** resolution (= the zoomed viewport, delivery × `capture_scale`). |
+| `screencast.showOverlay(html, {duration})` | Inject a `pointer-events:none` callout (we draw a highlight box around `highlight: true` clicks; coordinates divided by `capture_scale` — see below). |
 | `screencast.showChapter(text)` | 2s blurred chapter card. **Off by default** (`chapter_cards: false`) — scene intents become MP4 chapter metadata at compose instead. |
+
+(`screencast.showActions` is NOT used — its cursor double-scales under the
+zoomed capture; the recorder injects its own cursor instead, see below.)
 
 Overlays are pointer-events-none, so they never interfere with the page.
 
 ## 2x capture (crisp text)
 
-The context is created with `deviceScaleFactor: capture_scale` (default 2) and
-the screencast records at `resolution × capture_scale` — a true 4K master for a
-1080p delivery. `postprocess_clip.py` performs the single encode and the lanczos
-downscale, so WP admin text stays razor-sharp, and any focus zoom re-samples
-original 2x pixels instead of magnifying finished video.
+**Gotcha discovered empirically: `page.screencast` records at CSS pixels no
+matter what `deviceScaleFactor` is** — a larger `size` only letterboxes the
+CSS-pixel frame into a bigger canvas. The recorder therefore captures 2x via
+CSS zoom instead: the viewport opens at the MASTER size
+(`resolution × capture_scale`, e.g. 3840×2160) and the document is zoomed by
+`capture_scale`, so the layout matches the delivery resolution exactly while
+every pixel renders at 2x density. A true 4K master for a 1080p delivery.
+
+Coordinate rule that follows: `boundingBox()` returns zoomed (master) pixels,
+and injected overlays live inside the zoomed document — so overlay positions
+divide by `capture_scale` before injection, and the focus sidecar divides the
+box back to CSS layout px (postprocess multiplies by `scale` again).
+
+`postprocess_clip.py` performs the single encode and the lanczos downscale, so
+WP admin text stays razor-sharp, and any focus zoom re-samples original 2x
+pixels instead of magnifying finished video.
+
+## The tutorial cursor
+
+Playwright's `screencast.showActions` cursor positions itself with visual
+coordinates inside the zoomed document — under 2x zoom it lands at twice the
+target position. The recorder draws its own cursor instead: an SVG pointer
+injected into every page, gliding to each action target with an eased 0.55s CSS
+transition, plus an expanding ripple on clicks. One code path at every scale.
 
 ## Action phases: setup vs recorded
 
