@@ -137,6 +137,14 @@ def test_compose_timeline_chapters_faststart(tmp_path):
     assert len(chapters) == 2  # one per scene, titled by intent
 
 
+def test_grab_frames_writes_png_per_scene(tmp_path):
+    run = _mk_compose_run(tmp_path)
+    subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "grab_frames.py"),
+                    "--run-dir", str(run)], check=True)
+    assert (tmp_path / "verify" / "frames" / "01.png").exists()
+    assert (tmp_path / "verify" / "frames" / "02.png").exists()
+
+
 def test_full_compose_chain(tmp_path):
     run = _setup_run(tmp_path)
     for sid in ("01", "02"):
