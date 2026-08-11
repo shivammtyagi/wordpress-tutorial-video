@@ -34,6 +34,14 @@ Use the Playwright MCP tools (`browser_navigate`, `browser_snapshot`,
 7. **Flag, don't guess.** If a target cannot be resolved to a unique visible
    element, do **not** invent a selector. Mark the scene and revise the script
    (split the scene, change the approach, or ask the user about access/config).
+8. **Plan the phases and cues.** While walking each scene: mark the navigation
+   that merely reaches the scene's starting state as `phase: "setup"` (it runs
+   before recording starts), keep the actions the narration describes as
+   `phase: "recorded"`, and give each on-camera click a `cue` — the word in the
+   narration that names the control ("click **Save Changes**" →
+   `cue: "Save Changes"`). Flag any target matching
+   delete/remove/trash/deactivate/uninstall/reset to the user — the recorder
+   blocks those unless `allow_destructive` is set.
 
 ## Output
 

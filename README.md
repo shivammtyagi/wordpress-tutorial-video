@@ -19,15 +19,20 @@ that the target is WordPress.
 ## How it works
 
 ```
-doc URL ─▶ parse ─▶ script ─▶ voiceover ─▶ discover selectors ─▶ record scenes
-        ─▶ post-process ─▶ compose (FFmpeg) ─▶ verify (WhisperX + vision) ─▶ MP4
+doc URL ─▶ parse ─▶ script ─▶ voiceover ─▶ audio gate (WER) ─▶ discover selectors
+        ─▶ record scenes (2x master) ─▶ post-process ─▶ compose (FFmpeg)
+        ─▶ vision verify ─▶ MP4 (+ chapters + captions)
 ```
 
-Two ideas make it reliable:
+Three ideas make it reliable:
 
 1. **The script is the spine.** Everything hangs off a scene JSON contract.
 2. **Audio first.** Each scene's clip is paced to its narration length
-   (`max(clip, narration)`), so audio and video never drift.
+   (`max(clip, narration)`), so audio and video never drift. Actions can even be
+   cued to the exact spoken word ("…click **Save Changes**").
+3. **Verify before you spend.** Every scene's voiceover is transcribed back and
+   diffed against the script *before* recording starts; a vision check validates
+   each recorded scene afterwards, and only failing scenes are re-made.
 
 ## Requirements
 
@@ -72,28 +77,36 @@ See `config.json` in [SKILL.md](SKILL.md#inputs--configjson). Key knobs:
 
 | Setting | Default | Notes |
 |---------|---------|-------|
-| `resolution` / `fps` | `1920x1080` / `30` | 16:9. |
-| `voice` | `af_heart` | Kokoro voice (see [references/voices.md](references/voices.md)). |
-| `verify` | `full` | `full` (text + vision), `text` (free), or `off`. |
+| `resolution` / `fps` | `1920x1080` / `30` | Delivery resolution, 16:9. |
+| `capture_scale` | `2` | Records a 2x (4K) master for crisp text; `deliver_4k: true` also outputs full 4K. |
+| `voice` / `speed` | `af_heart` / `0.9` | Kokoro voice + pace (see [references/voices.md](references/voices.md)). |
+| `lexicon` | `{}` | Pronunciation overrides (term → IPA) merged with [references/lexicon.json](references/lexicon.json). |
+| `chapter_cards` | `false` | Per-scene blur cards off; scene intents become MP4 chapter markers. |
+| `transitions` | `"none"` | `"fade"` enables crossfades (re-encode). |
+| `verify` | `full` | `full` (audio gate + vision), `text` (audio gate only, free), or `off`. |
 | `verify_sample` | `0` | Run the vision check on N scenes only (0 = all). |
+| `wer_threshold` | `0.15` | Max per-scene word error rate at the audio gate. |
 | `max_fix_iterations` | `2` | Cap on auto-fix rounds. |
+| `allow_destructive` | `false` | Recorder refuses delete/deactivate/… clicks unless enabled. |
+| `redact_selectors` / `redact_patterns` | `[]` | Blur secrets (emails, license keys) while recording. |
 
 ## Cost note
 
 The verification loop sends a frame per scene to Claude vision — that's the
 credit-heavy step, and it's on by default for quality. Dial it down with
-`verify=text`, `verify_sample`, or `verify=off`. The transcript diff and captions
-are local and free.
+`verify=text`, `verify_sample`, or `verify=off`. The audio gate (per-scene
+transcript diff), captions, and chapters are local and free.
 
 ## The stack
 
 | Layer | Tool |
 |-------|------|
 | Parse & script | Claude Code |
-| Voiceover | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0); Chatterbox-Turbo optional |
-| Record | Playwright `page.screencast` (≥ 1.59) |
-| Compose | FFmpeg |
-| Verify & captions | [WhisperX](https://github.com/m-bain/whisperX) + Claude vision |
+| Voiceover | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) + espeak-ng; Chatterbox (MIT) optional |
+| Audio gate & alignment | [WhisperX](https://github.com/m-bain/whisperX) (faster-whisper fallback) |
+| Record | Playwright `page.screencast` (≥ 1.59), 2x device-scale master |
+| Compose | FFmpeg (single-encode pipeline, loudness-normalized, MP4 chapters) |
+| Visual verify | Claude vision |
 
 ## Limitations
 
@@ -106,6 +119,9 @@ verification consumes credits (tunable) · Kokoro is English-leaning.
 python3 -m pytest -q          # python steps (ffmpeg tests skip if ffmpeg absent)
 node tests/test_record_scene.mjs   # recorder against a static fixture (no WordPress)
 ```
+
+CI runs both on macOS for every push/PR (`.github/workflows/ci.yml`). TTS and
+transcription have `--engine stub` modes so the suite needs no ML downloads.
 
 ## License
 
