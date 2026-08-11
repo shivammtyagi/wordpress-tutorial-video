@@ -62,6 +62,12 @@ navigation into `phase: "setup"` so the clip opens on the scene's starting state
 and use `cue` so clicks land on the words describing them ("…click **Save
 Changes**" → `cue: "Save Changes"`).
 
+**Give destinations screen time.** When a scene's final action navigates (a menu
+click, a `goto`), the destination page must visibly render before the scene ends
+— heavy admin apps take 2–3s to paint. Set that scene's `hold_after_ms` to
+3000–4000, and avoid cueing a navigation click on the narration's last word
+(the click would land with no narration left for the new page).
+
 ## Annotated example
 
 ```jsonc
