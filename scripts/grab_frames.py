@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Grab one mid-clip frame per scene for the Claude-vision check (step 10)."""
+"""Grab one late-clip frame per scene for the Claude-vision check (step 10).
+
+Frames are taken at 80% of the clip: a scene's `expect_on_screen` describes its
+END state (after the last action), and the final 20% sits inside the settled
+hold, so 80% is representative without risking the frozen tpad tail edge.
+"""
 import argparse
 import json
 import os
@@ -35,7 +40,7 @@ def main():
         clip = os.path.join(args.run_dir, "clips", f"{sid}.final.mp4")
         if not os.path.exists(clip):
             raise SystemExit(f"grab_frames: missing {clip}")
-        mid = probe_duration(clip) / 2
+        mid = probe_duration(clip) * 0.8
         out = os.path.join(frames_dir, f"{sid}.png")
         subprocess.run(["ffmpeg", "-y", "-ss", f"{mid:.3f}", "-i", clip,
                         "-frames:v", "1", out], check=True,

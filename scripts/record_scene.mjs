@@ -79,6 +79,29 @@ if (risky.length && !cfg.allow_destructive) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const norm = (s) => s.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim();
 
+// Glide the DOM cursor to an element's center (layout px = zoomed px / scale),
+// wait out the transition, and optionally pulse a click ripple.
+async function glideCursorTo(page, loc, { ripple = false } = {}) {
+  const box = await loc.boundingBox().catch(() => null);
+  if (!box) return;
+  const x = (box.x + box.width / 2) / scale;
+  const y = (box.y + box.height / 2) / scale;
+  await page.evaluate(([cx, cy, rip]) => {
+    const c = document.getElementById('__wtv_cursor');
+    if (c) { c.style.left = cx + 'px'; c.style.top = cy + 'px'; }
+    if (rip) {
+      const r = document.createElement('div');
+      r.style.cssText = `position:fixed;left:${cx - 18}px;top:${cy - 18}px;width:36px;height:36px;` +
+        'border-radius:50%;border:3px solid #4f9dff;z-index:2147483646;pointer-events:none;' +
+        'opacity:.9;transform:scale(.4);transition:transform .45s ease-out,opacity .45s ease-out;';
+      document.body.appendChild(r);
+      requestAnimationFrame(() => { r.style.transform = 'scale(1.6)'; r.style.opacity = '0'; });
+      setTimeout(() => r.remove(), 600);
+    }
+  }, [x, y, ripple]).catch(() => {});
+  await sleep(600); // let the glide finish before the action lands
+}
+
 // Cue → ms offset into the narration; monotonic search from the previous cue.
 let cueCursor = 0;
 function cueOffsetMs(cue) {
@@ -165,15 +188,19 @@ async function runAction(page, a) {
       if (a.highlight) {
         const box = await loc.boundingBox();
         if (box) {
+          // overlay lives inside the zoomed document → divide by scale
+          const [hx, hy, hw, hh] = [box.x / scale, box.y / scale,
+            box.width / scale, box.height / scale];
           await page.screencast.showOverlay(
-            `<div style="position:fixed;left:${box.x - 6}px;top:${box.y - 6}px;` +
-            `width:${box.width + 12}px;height:${box.height + 12}px;` +
+            `<div style="position:fixed;left:${hx - 6}px;top:${hy - 6}px;` +
+            `width:${hw + 12}px;height:${hh + 12}px;` +
             `border:3px solid #4f9dff;border-radius:8px;` +
             `box-shadow:0 0 0 9999px rgba(0,0,0,.12);pointer-events:none;"></div>`,
             { duration: 1200 });
           await sleep(250);
         }
       }
+      await glideCursorTo(page, loc, { ripple: true });
       await loc.click({ timeout: actionTimeout });
       await page.waitForLoadState('domcontentloaded', { timeout: actionTimeout }).catch(() => {});
       await preflight(page);
@@ -182,12 +209,19 @@ async function runAction(page, a) {
     case 'type': {
       const loc = page.locator(sel).first();
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
+      await glideCursorTo(page, loc);
       await loc.click();
       await loc.pressSequentially(a.text || '', { delay: 60 });
       break;
     }
     case 'hover': {
-      await page.locator(sel).first().hover({ timeout: actionTimeout });
+      const loc = page.locator(sel).first();
+      await loc.waitFor({ state: 'visible', timeout: actionTimeout });
+      await loc.evaluate((el) =>
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })).catch(() => {});
+      await sleep(350);
+      await glideCursorTo(page, loc);
+      await loc.hover({ timeout: actionTimeout });
       break;
     }
     case 'scroll': {
@@ -205,12 +239,44 @@ async function runAction(page, a) {
   }
 }
 
+// 2x capture technique: page.screencast records at CSS pixels regardless of
+// deviceScaleFactor (verified empirically), so we open the viewport at the
+// MASTER size and CSS-zoom the document by `scale`. Layout matches the delivery
+// resolution exactly while every pixel is rendered at scale× density.
+// Consequence: element coordinates from boundingBox() come back in zoomed
+// (master) pixels — divide by `scale` before positioning injected overlays
+// (they live inside the zoomed document and get re-scaled on render).
 const browser = await chromium.launch();
 const context = await browser.newContext({
-  viewport: { width, height },
-  deviceScaleFactor: scale,
+  viewport: { width: width * scale, height: height * scale },
   ignoreHTTPSErrors: cfg.ignore_https_errors !== false,
 });
+if (scale !== 1) {
+  await context.addInitScript(`(() => {
+    const apply = () => { document.documentElement.style.zoom = '${scale}'; };
+    document.addEventListener('DOMContentLoaded', apply);
+    apply();
+  })()`);
+}
+// Tutorial cursor: a DOM pointer that glides between action targets with an
+// eased CSS transition (Playwright's showActions cursor double-scales under
+// zoom, so we draw our own — one code path for every capture scale).
+await context.addInitScript(`(() => {
+  const mk = () => {
+    if (document.getElementById('__wtv_cursor') || !document.body) return;
+    const c = document.createElement('div');
+    c.id = '__wtv_cursor';
+    c.style.cssText = 'position:fixed;left:40%;top:40%;width:28px;height:28px;' +
+      'z-index:2147483647;pointer-events:none;' +
+      'transition:left .55s cubic-bezier(.25,.1,.25,1),top .55s cubic-bezier(.25,.1,.25,1);' +
+      'filter:drop-shadow(0 2px 4px rgba(0,0,0,.35));';
+    c.innerHTML = '<svg viewBox="0 0 24 24" width="28" height="28">' +
+      '<path d="M5 3l14 9-6 1 3 6-3 1.5-3-6L5 19z" fill="#fff" stroke="#111" stroke-width="1.4"/></svg>';
+    document.body.appendChild(c);
+  };
+  document.addEventListener('DOMContentLoaded', mk);
+  mk();
+})()`);
 if ((cfg.redact_selectors || []).length || (cfg.redact_patterns || []).length) {
   const selectors = JSON.stringify(cfg.redact_selectors || []);
   const patterns = JSON.stringify(cfg.redact_patterns || []);
@@ -255,7 +321,6 @@ await page.screencast.start({
   size: { width: width * scale, height: height * scale },
   quality: 90,
 });
-await page.screencast.showActions({ cursor: 'pointer', duration: 700 });
 if (cfg.chapter_cards) {
   await page.screencast.showChapter(scene.intent || `Scene ${sceneId}`);
 }
@@ -270,12 +335,18 @@ for (const a of recordedActions) {
   await runAction(page, a);
 }
 
-// Record the focus element's bounding box (CSS px) + capture scale for the
-// post-processor's zoom (multiply by `scale` for master-pixel coordinates).
+// Record the focus element's bounding box (CSS layout px) + capture scale for
+// the post-processor's zoom (it multiplies by `scale` for master-pixel coords).
+// Under CSS zoom, boundingBox() returns zoomed (master) pixels — divide back.
 let focusBox = null;
 if (scene.focus_selector) {
-  try { focusBox = await page.locator(scene.focus_selector).first().boundingBox(); }
-  catch { /* focus optional */ }
+  try {
+    const b = await page.locator(scene.focus_selector).first().boundingBox();
+    if (b) {
+      focusBox = { x: b.x / scale, y: b.y / scale,
+                   width: b.width / scale, height: b.height / scale };
+    }
+  } catch { /* focus optional */ }
 }
 writeFileSync(focusOut, JSON.stringify(
   { box: focusBox, viewport: { width, height }, scale }, null, 2));
