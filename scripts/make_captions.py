@@ -1,12 +1,20 @@
 #!/usr/bin/env python3
-"""Step 10b: turn WhisperX word timestamps into an SRT caption file.
+"""Step 9a: build the SRT caption file.
 
-Words are grouped into cues bounded by a max character count and a max cue
-duration, so captions stay readable and aligned. The cue timing comes straight
-from WhisperX's forced-alignment word timestamps (sub-100ms), so captions match
-the spoken audio for free.
+v2 (default): caption TEXT comes from the scene script (ground truth — technical
+terms are never misheard), TIMING comes from the audio gate's per-scene word
+alignments (verify/scenes/NN.json) offset by the compose timeline
+(output/timeline.json). Mapping is a monotonic sequence match; unmatched script
+words interpolate between matched neighbors.
+
+Fallback (v1 behavior): when alignments or the timeline are missing, read
+verify/transcript.json (whole-video transcription) directly.
+
+Cues are bounded by max characters and max duration, get a +0.3s readability
+tail, and are de-overlapped by 0.05s (floating-point overlap protection).
 """
 import argparse
+import difflib
 import json
 import os
 import sys
@@ -23,6 +31,57 @@ def _ts(seconds):
     m, ms = divmod(ms, 60000)
     s, ms = divmod(ms, 1000)
     return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _norm(t):
+    return "".join(c for c in t.lower() if c.isalnum() or c == "'")
+
+
+def align_script_words(script_tokens, words):
+    """Map script tokens onto transcript word timings (monotonic match)."""
+    hyp = [_norm(w["word"]) for w in words]
+    ref = [_norm(t) for t in script_tokens]
+    sm = difflib.SequenceMatcher(a=ref, b=hyp, autojunk=False)
+    mapped = [None] * len(ref)
+    for a, b, n in (m for m in sm.get_matching_blocks() if m.size):
+        for k in range(n):
+            mapped[a + k] = (words[b + k]["start"], words[b + k]["end"])
+    out = []
+    for i, tok in enumerate(script_tokens):
+        if mapped[i] is None:
+            prev_end = next((mapped[j][1] for j in range(i - 1, -1, -1) if mapped[j]), 0.0)
+            nxt_start = next((mapped[j][0] for j in range(i + 1, len(ref)) if mapped[j]),
+                             prev_end + 0.3)
+            mapped[i] = (prev_end, max(prev_end, nxt_start))
+        out.append({"word": tok, "start": mapped[i][0], "end": mapped[i][1]})
+    return out
+
+
+def _alignment_words(run_dir):
+    """Absolute-time script words from per-scene alignments + compose timeline."""
+    tl_path = os.path.join(run_dir, "output", "timeline.json")
+    script_path = next((os.path.join(run_dir, n) for n in
+                        ("script.discovered.json", "script.json")
+                        if os.path.exists(os.path.join(run_dir, n))), None)
+    if not (os.path.exists(tl_path) and script_path):
+        return None
+    timeline = json.load(open(tl_path))
+    script = json.load(open(script_path))
+    scenes = {s["id"]: s for s in script["scenes"]}
+    all_words = []
+    for seg in timeline["segments"]:
+        if seg["kind"] != "scene":
+            continue
+        sw_path = os.path.join(run_dir, "verify", "scenes", f"{seg['id']}.json")
+        if not os.path.exists(sw_path):
+            return None  # incomplete alignments → caller falls back
+        words = json.load(open(sw_path))["words"]
+        toks = scenes[seg["id"]]["narration"].split()
+        for w in align_script_words(toks, words):
+            all_words.append({"word": w["word"],
+                              "start": round(seg["start"] + w["start"], 3),
+                              "end": round(seg["start"] + w["end"], 3)})
+    return all_words
 
 
 def words_to_srt(words, max_chars=42, max_secs=3.5):
@@ -48,10 +107,12 @@ def words_to_srt(words, max_chars=42, max_secs=3.5):
 
     out = []
     for i, cue in enumerate(cues, 1):
-        start = _ts(cue[0]["start"])
-        end = _ts(cue[-1]["end"])
+        start = cue[0]["start"]
+        end = cue[-1]["end"] + 0.3  # readability tail
+        if i < len(cues):
+            end = min(end, cues[i][0]["start"] - 0.05)  # de-overlap
         text = " ".join(w["word"].strip() for w in cue)
-        out.append(f"{i}\n{start} --> {end}\n{text}")
+        out.append(f"{i}\n{_ts(start)} --> {_ts(max(end, start + 0.2))}\n{text}")
     return "\n\n".join(out) + ("\n" if out else "")
 
 
@@ -61,8 +122,14 @@ def main():
     ap.add_argument("--max-chars", type=int, default=42)
     args = ap.parse_args()
 
-    transcript = json.load(open(os.path.join(args.run_dir, "verify", "transcript.json")))
-    words = transcript.get("words", [])
+    words = _alignment_words(args.run_dir)
+    if words is None:
+        transcript_path = os.path.join(args.run_dir, "verify", "transcript.json")
+        if not os.path.exists(transcript_path):
+            raise SystemExit("make_captions: no per-scene alignments and no "
+                             "verify/transcript.json — run verify_scenes.py or "
+                             "transcribe_whisperx.py first")
+        words = json.load(open(transcript_path)).get("words", [])
     srt = words_to_srt(words, max_chars=args.max_chars)
     rd.atomic_write(os.path.join(args.run_dir, "captions.srt"), srt)
     print(f"make_captions: wrote captions.srt ({srt.count(chr(10) + chr(10)) + 1} cues)")
