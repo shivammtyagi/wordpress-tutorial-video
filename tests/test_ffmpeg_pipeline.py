@@ -96,6 +96,47 @@ def test_postprocess_writes_4k_variant(tmp_path):
     assert _probe_dims(os.path.join(run, "clips", "01.final-4k.mp4")) == (1280, 720)
 
 
+def _mk_compose_run(tmp_path):
+    run = tmp_path
+    (run / "clips").mkdir(exist_ok=True)
+    (run / "audio").mkdir(exist_ok=True)
+    (run / "script.json").write_text(json.dumps({
+        "title": "T", "resolution": "320x180", "fps": 30, "voice": "af_heart",
+        "scenes": [
+            {"id": "01", "narration": "One.", "intent": "First step",
+             "actions": [{"type": "wait", "target": "t", "text": "1"}],
+             "hold_after_ms": 1, "verify": {"expect_on_screen": "x"}},
+            {"id": "02", "narration": "Two.", "intent": "Second step",
+             "actions": [{"type": "wait", "target": "t", "text": "1"}],
+             "hold_after_ms": 1, "verify": {"expect_on_screen": "x"}}]}))
+    (run / "config.json").write_text(json.dumps({"resolution": "320x180", "fps": 30}))
+    for sid in ("01", "02"):
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i",
+                        "testsrc=size=320x180:rate=30", "-t", "1",
+                        "-c:v", "libx264", "-crf", "18", "-preset", "medium",
+                        "-pix_fmt", "yuv420p", str(run / "clips" / f"{sid}.final.mp4")],
+                       check=True, capture_output=True)
+        subprocess.run(["ffmpeg", "-y", "-f", "lavfi", "-i",
+                        "sine=frequency=440:duration=1", "-ar", "24000", "-ac", "1",
+                        str(run / "audio" / f"{sid}.wav")], check=True, capture_output=True)
+    return run
+
+
+def test_compose_timeline_chapters_faststart(tmp_path):
+    run = _mk_compose_run(tmp_path)
+    subprocess.run([sys.executable, os.path.join(ROOT, "scripts", "compose.py"),
+                    "--run-dir", str(run)], check=True)
+    tl = json.loads((run / "output" / "timeline.json").read_text())
+    kinds = [s["kind"] for s in tl["segments"]]
+    assert kinds == ["intro", "scene", "scene", "outro"]
+    assert tl["segments"][1]["start"] > 0
+    probe = subprocess.check_output(
+        ["ffprobe", "-v", "error", "-show_chapters", "-of", "json",
+         str(run / "output" / "final.mp4")], text=True)
+    chapters = json.loads(probe)["chapters"]
+    assert len(chapters) == 2  # one per scene, titled by intent
+
+
 def test_full_compose_chain(tmp_path):
     run = _setup_run(tmp_path)
     for sid in ("01", "02"):

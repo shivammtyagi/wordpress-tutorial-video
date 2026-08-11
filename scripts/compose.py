@@ -1,11 +1,21 @@
 #!/usr/bin/env python3
 """Step 9: compose final per-scene clips + audio into the finished MP4.
 
-For each scene: mux clips/NN.final.mp4 with audio/NN.wav. Concatenate scenes,
-prepend a title intro card and append an outro card (rendered via Chromium).
-Captions are muxed as a soft mov_text subtitle track by default (portable);
---burn-captions hard-burns them when the ffmpeg `subtitles` filter is available.
+v2 rules:
+  * video is NEVER re-encoded here — postprocess_clip.py did the single x264
+    encode; per-scene mux and the concat both stream-copy video.
+  * narration audio gets one filter chain at mux time:
+    loudnorm (-16 LUFS, voice-first) -> 48kHz resample -> apad to the clip
+    length (fixes the v1 `-shortest` truncation when actions outlast narration).
+  * intro/outro cards are encoded ONCE with identical x264/audio parameters so
+    the copy-concat stays valid.
+  * writes output/timeline.json (segment start/end map), then invokes
+    make_captions.py (script-text captions from per-scene alignments), then the
+    final mux embeds MP4 chapter metadata (scene intents) + the soft caption
+    track + `+faststart`.
 
+Captions are a soft `mov_text` subtitle track by default (portable);
+--burn-captions hard-burns them only when the ffmpeg `subtitles` filter exists.
 Writes output/final.mp4. Requires ffmpeg/ffprobe.
 """
 import argparse
@@ -13,10 +23,15 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 
-
 HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, "lib"))
+import run_dir as rd
+
+X264 = ["-c:v", "libx264", "-crf", "18", "-preset", "medium", "-pix_fmt", "yuv420p"]
+AUD = ["-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2"]
 
 
 def _require_ffmpeg():
@@ -33,11 +48,15 @@ def _has_filter(name):
         return False
 
 
-def _render_card_png(title, subtitle, png, resolution):
-    """Render a card to PNG via Chromium (portable; no ffmpeg drawtext needed).
+def probe_duration(path):
+    out = subprocess.check_output([
+        "ffprobe", "-v", "error", "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1", path])
+    return float(out.strip())
 
-    Returns True on success, False if Playwright/node is unavailable.
-    """
+
+def _render_card_png(title, subtitle, png, resolution):
+    """Render a card to PNG via Chromium (portable; no ffmpeg drawtext needed)."""
     w, h = resolution.split("x")
     try:
         subprocess.run([
@@ -61,22 +80,72 @@ def _card(text, out, resolution, fps, seconds=2.0, subtitle=""):
         vin = ["-f", "lavfi", "-i", f"color=c=#0b1f3a:s={w}x{h}:r={fps}"]
     subprocess.run([
         "ffmpeg", "-y", *vin,
-        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
-        "-t", f"{seconds}", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
-        "-vf", f"scale={w}:{h}", "-c:a", "aac", "-shortest", out,
+        "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=48000",
+        "-t", f"{seconds}", *X264, "-r", str(fps), "-vf", f"scale={w}:{h}",
+        *AUD, "-shortest", out,
     ], check=True)
     if os.path.exists(png):
         os.unlink(png)
 
 
 def _mux_scene(clip, wav, out, fps):
-    # video from clip, audio from wav; pad/trim audio to video length
-    subprocess.run([
-        "ffmpeg", "-y", "-i", clip, "-i", wav,
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
-        "-c:a", "aac", "-ar", "44100", "-shortest", out,
-    ], check=True)
+    # video stream-copied; audio normalized then padded with silence to the
+    # exact clip length (never truncate the video to the audio!)
+    # loudnorm NaNs out on digitally-silent audio (stub WAVs, empty narration),
+    # so fall back to a plain resample+pad chain if the normalize pass fails.
+    clip_len = probe_duration(clip)
+
+    def _run(af):
+        return subprocess.run([
+            "ffmpeg", "-y", "-i", clip, "-i", wav,
+            "-map", "0:v:0", "-map", "1:a:0",
+            "-c:v", "copy", "-af", af,
+            *AUD, "-t", f"{clip_len:.3f}", out,
+        ], capture_output=True)
+
+    r = _run("loudnorm=I=-16:TP=-1.5:LRA=11,aresample=48000,apad")
+    if r.returncode != 0:
+        print(f"compose: loudnorm failed on {os.path.basename(wav)} "
+              "(silent audio?); muxing without normalization")
+        r = _run("aresample=48000,apad")
+        if r.returncode != 0:
+            raise SystemExit(f"compose: mux failed for {clip}:\n"
+                             + r.stderr.decode(errors="replace")[-800:])
+
+
+def _write_chapters(path, timeline, title):
+    lines = [";FFMETADATA1", f"title={title}"]
+    for seg in timeline["segments"]:
+        if seg["kind"] != "scene":
+            continue
+        lines += ["[CHAPTER]", "TIMEBASE=1/1000",
+                  f"START={int(seg['start'] * 1000)}", f"END={int(seg['end'] * 1000)}",
+                  f"title={seg['intent']}"]
+    with open(path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def _concat_fade(segpaths, out, fps, duration=0.5):
+    # xfade/acrossfade chain requires a re-encode; used only when transitions=fade
+    inputs = []
+    for p in segpaths:
+        inputs += ["-i", p]
+    filters, last, offset = [], "0:v", 0.0
+    for i in range(1, len(segpaths)):
+        offset += probe_duration(segpaths[i - 1]) - duration
+        out_lbl = f"v{i}"
+        filters.append(f"[{last}][{i}:v]xfade=transition=fade:duration={duration}"
+                       f":offset={offset:.3f}[{out_lbl}]")
+        last = out_lbl
+    afilters, alast = [], "0:a"
+    for i in range(1, len(segpaths)):
+        out_lbl = f"a{i}"
+        afilters.append(f"[{alast}][{i}:a]acrossfade=d={duration}[{out_lbl}]")
+        alast = out_lbl
+    subprocess.run(["ffmpeg", "-y", *inputs,
+                    "-filter_complex", ";".join(filters + afilters),
+                    "-map", f"[{last}]", "-map", f"[{alast}]",
+                    *X264, "-r", str(fps), *AUD, out], check=True)
 
 
 def main():
@@ -95,6 +164,7 @@ def main():
     cfg = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}
     resolution = cfg.get("resolution", "1920x1080")
     fps = int(cfg.get("fps", 30))
+    fade = cfg.get("transitions") == "fade"
 
     script_path = next((os.path.join(args.run_dir, n) for n in
                         ("script.discovered.json", "script.json")
@@ -110,40 +180,59 @@ def main():
     os.makedirs(out_dir, exist_ok=True)
 
     work = tempfile.mkdtemp(prefix="compose_", dir=out_dir)
-    segments = []
+    segments = []  # (kind, id, intent, path)
 
     if not args.no_intro:
         intro = os.path.join(work, "intro.mp4")
         _card(title, intro, resolution, fps)
-        segments.append(intro)
+        segments.append(("intro", None, None, intro))
 
+    scene_clips = []
     for scene in script["scenes"]:
         sid = scene["id"]
         clip = os.path.join(clips_dir, f"{sid}.final.mp4")
         wav = os.path.join(audio_dir, f"{sid}.wav")
         if not os.path.exists(clip):
             raise SystemExit(f"compose: missing {clip}")
+        scene_clips.append(clip)
         seg = os.path.join(work, f"seg_{sid}.mp4")
         _mux_scene(clip, wav, seg, fps)
-        segments.append(seg)
+        segments.append(("scene", sid, scene.get("intent", sid), seg))
 
     if not args.no_intro:
         outro = os.path.join(work, "outro.mp4")
         _card("Thanks for watching", outro, resolution, fps)
-        segments.append(outro)
+        segments.append(("outro", None, None, outro))
 
-    # concat via demuxer (re-encode for uniformity)
-    listfile = os.path.join(work, "list.txt")
-    with open(listfile, "w") as f:
-        for s in segments:
-            f.write(f"file '{os.path.abspath(s)}'\n")
+    # timeline from actual segment durations (fade overlaps shift later starts)
+    overlap = 0.5 if fade else 0.0
+    t, timeline = 0.0, {"segments": []}
+    for i, (kind, sid, intent, path) in enumerate(segments):
+        d = probe_duration(path)
+        start = max(0.0, t - overlap * i)
+        timeline["segments"].append({"kind": kind, "id": sid, "intent": intent,
+                                     "start": round(start, 3), "end": round(start + d, 3)})
+        t += d
+    rd.write_json(os.path.join(out_dir, "timeline.json"), timeline)
+
+    # captions BEFORE the final mux (script-text + alignments; falls back internally)
+    if not args.no_captions:
+        subprocess.run([sys.executable, os.path.join(HERE, "make_captions.py"),
+                        "--run-dir", args.run_dir], check=False)
 
     concat_out = os.path.join(work, "concat.mp4")
-    subprocess.run([
-        "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listfile,
-        "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", str(fps),
-        "-c:a", "aac", "-ar", "44100", concat_out,
-    ], check=True)
+    if fade and len(segments) > 1:
+        _concat_fade([s[3] for s in segments], concat_out, fps)
+    else:
+        listfile = os.path.join(work, "list.txt")
+        with open(listfile, "w") as f:
+            for _, _, _, s in segments:
+                f.write(f"file '{os.path.abspath(s)}'\n")
+        subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listfile,
+                        "-c", "copy", concat_out], check=True)
+
+    chapters = os.path.join(work, "chapters.ffmeta")
+    _write_chapters(chapters, timeline, title)
 
     final = os.path.join(out_dir, "final.mp4")
     captions = os.path.join(args.run_dir, "captions.srt")
@@ -151,23 +240,24 @@ def main():
                      and os.path.getsize(captions) > 0)
 
     if have_captions and args.burn_captions and _has_filter("subtitles"):
-        subprocess.run([
-            "ffmpeg", "-y", "-i", concat_out,
-            "-vf", f"subtitles='{captions}'",
-            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-c:a", "copy", final,
-        ], check=True)
+        subprocess.run(["ffmpeg", "-y", "-i", concat_out, "-i", chapters,
+                        "-map_metadata", "1",
+                        "-vf", f"subtitles='{captions}'",
+                        *X264, "-c:a", "copy", "-movflags", "+faststart", final], check=True)
     elif have_captions:
         if args.burn_captions:
             print("compose: 'subtitles' filter unavailable; muxing soft captions instead")
-        # portable soft subtitle track (toggleable in any player)
-        subprocess.run([
-            "ffmpeg", "-y", "-i", concat_out, "-i", captions,
-            "-map", "0", "-map", "1", "-c", "copy", "-c:s", "mov_text",
-            "-metadata:s:s:0", "language=eng", final,
-        ], check=True)
+        subprocess.run(["ffmpeg", "-y", "-i", concat_out, "-i", captions, "-i", chapters,
+                        "-map", "0", "-map", "1", "-map_metadata", "2",
+                        "-c", "copy", "-c:s", "mov_text",
+                        "-metadata:s:s:0", "language=eng",
+                        "-movflags", "+faststart", final], check=True)
     else:
-        shutil.move(concat_out, final)
+        subprocess.run(["ffmpeg", "-y", "-i", concat_out, "-i", chapters,
+                        "-map_metadata", "1", "-c", "copy",
+                        "-movflags", "+faststart", final], check=True)
 
+    rd.mark_done(args.run_dir, "compose", scene_clips)
     shutil.rmtree(work, ignore_errors=True)
     print(f"compose: wrote {final}")
 
