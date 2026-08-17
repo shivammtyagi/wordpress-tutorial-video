@@ -103,15 +103,24 @@ async function glideCursorTo(page, loc, { ripple = false } = {}) {
 }
 
 // Cue → ms offset into the narration; monotonic search from the previous cue.
+// Matching is tolerant of transcription word-splits ("Sitemaps" vs "Site Maps"):
+// the space-stripped cue is compared against 1..4 adjacent transcript tokens
+// concatenated.
 let cueCursor = 0;
 function cueOffsetMs(cue) {
   if (!cue || !sceneWords.length) return null;
-  const cueToks = norm(cue).split(' ').filter(Boolean);
-  const toks = sceneWords.map((w) => norm(w.word));
-  for (let i = Math.max(cueCursor, 0); i <= toks.length - cueToks.length; i++) {
-    if (cueToks.every((t, k) => toks[i + k] === t)) {
-      cueCursor = i + cueToks.length;
-      return Math.round(sceneWords[i].start * 1000);
+  const target = norm(cue).replace(/ /g, '');
+  if (!target) return null;
+  const toks = sceneWords.map((w) => norm(w.word).replace(/ /g, ''));
+  for (let i = Math.max(cueCursor, 0); i < toks.length; i++) {
+    let joined = '';
+    for (let k = 0; k < 4 && i + k < toks.length; k++) {
+      joined += toks[i + k];
+      if (joined === target) {
+        cueCursor = i + k + 1;
+        return Math.round(sceneWords[i].start * 1000);
+      }
+      if (joined.length >= target.length) break;
     }
   }
   return null; // cue not found → sequential pacing (never fails the run)
@@ -201,8 +210,21 @@ async function runAction(page, a) {
         }
       }
       await glideCursorTo(page, loc, { ripple: true });
+      // Navigation clicks intermittently miss under zoomed fixed-position
+      // flyouts (hit-test race): if the element links somewhere and the URL
+      // didn't change, retry once with a JS click (bypasses hit-testing).
+      const href = await loc.getAttribute('href').catch(() => null);
+      const preUrl = page.url();
       await loc.click({ timeout: actionTimeout });
       await page.waitForLoadState('domcontentloaded', { timeout: actionTimeout }).catch(() => {});
+      if (href && href !== '#' && page.url() === preUrl) {
+        await sleep(800); // slow navigations get a beat before we intervene
+        if (page.url() === preUrl) {
+          console.error(`record_scene: click on '${a.target}' did not navigate; retrying via JS click`);
+          await loc.evaluate((el) => el.click()).catch(() => {});
+          await page.waitForLoadState('domcontentloaded', { timeout: actionTimeout }).catch(() => {});
+        }
+      }
       await preflight(page);
       break;
     }
