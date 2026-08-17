@@ -34,6 +34,19 @@ Three ideas make it reliable:
    diffed against the script *before* recording starts; a vision check validates
    each recorded scene afterwards, and only failing scenes are re-made.
 
+## Sample output
+
+A frame from a fully machine-generated and machine-verified pilot video (AIOSEO's
+XML Sitemaps doc, recorded on a local WordPress site — note the glide cursor
+resting on the toggle the narration is describing):
+
+![Sample tutorial frame](docs/images/sample-scene.png)
+
+The finished MP4 ships with narration at −16 LUFS, aligned soft captions built
+from the script text, embedded chapter markers (one per scene), and a
+`verify/report.json` proving every scene passed both the audio-transcript diff
+and the vision check.
+
 ## Requirements
 
 - **macOS** (Homebrew). Apple Silicon recommended.
