@@ -210,20 +210,22 @@ async function runAction(page, a) {
         }
       }
       await glideCursorTo(page, loc, { ripple: true });
-      // Navigation clicks intermittently miss under zoomed fixed-position
-      // flyouts (hit-test race): if the element links somewhere and the URL
-      // didn't change, retry once with a JS click (bypasses hit-testing).
+      // page.screencast FREEZES on renderer-initiated cross-document
+      // navigations (verified empirically; API goto records fine). For links
+      // that leave the current document: perform the click visually with its
+      // navigation prevented, then drive the same navigation via goto — the
+      // viewer sees an identical click, and the capture never freezes.
       const href = await loc.getAttribute('href').catch(() => null);
-      const preUrl = page.url();
-      await loc.click({ timeout: actionTimeout });
-      await page.waitForLoadState('domcontentloaded', { timeout: actionTimeout }).catch(() => {});
-      if (href && href !== '#' && page.url() === preUrl) {
-        await sleep(800); // slow navigations get a beat before we intervene
-        if (page.url() === preUrl) {
-          console.error(`record_scene: click on '${a.target}' did not navigate; retrying via JS click`);
-          await loc.evaluate((el) => el.click()).catch(() => {});
-          await page.waitForLoadState('domcontentloaded', { timeout: actionTimeout }).catch(() => {});
-        }
+      const crossDoc = href && !href.startsWith('#') && !href.startsWith('javascript:');
+      if (crossDoc) {
+        await loc.evaluate((el) => el.addEventListener(
+          'click', (e) => e.preventDefault(), { capture: true, once: true }));
+        await loc.click({ timeout: actionTimeout });
+        const target = new URL(href, page.url()).toString();
+        await page.goto(target, { waitUntil: 'domcontentloaded' });
+      } else {
+        await loc.click({ timeout: actionTimeout });
+        await page.waitForLoadState('domcontentloaded', { timeout: actionTimeout }).catch(() => {});
       }
       await preflight(page);
       break;
