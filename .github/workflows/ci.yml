@@ -9,8 +9,12 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: {node-version: 22}
-      - name: Install ffmpeg
-        run: brew install ffmpeg
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
+      - name: Install ffmpeg + pytest
+        run: |
+          brew install ffmpeg
+          python3 -m pip install pytest
       - name: Python tests (stub engines; no ML deps needed)
         run: python3 -m pytest -q
       - name: Node deps + Chromium
