@@ -16,6 +16,14 @@
 import { chromium } from 'playwright';
 import { readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+// Genuine macOS arrow cursor (extracted from NSCursor.arrow at 5x), logical
+// size 28x40 with hotspot (5,5) — displayed at logical size so the capture's
+// deviceScaleFactor keeps it razor-sharp.
+const CURSOR_PNG_B64 = readFileSync(join(
+  dirname(fileURLToPath(import.meta.url)), '..', 'assets', 'cursor-macos.png',
+)).toString('base64');
 
 function arg(name, def = undefined) {
   const i = process.argv.indexOf(`--${name}`);
@@ -47,6 +55,7 @@ const [width, height] = (script.resolution || cfg.resolution || '1920x1080')
 const scale = Number(cfg.capture_scale ?? 2);
 const baseUrl = arg('base-url', cfg.base_url || cfg.site_url);
 const actionTimeout = Number(cfg.action_timeout_ms ?? 10000);
+const accent = cfg.accent_color || '#2271b1'; // highlight/ripple color (WP admin blue default)
 const isFixture = !!baseUrl && baseUrl.startsWith('file://');
 
 const durations = existsSync(join(runDir, 'audio', 'durations.json'))
@@ -79,27 +88,66 @@ if (risky.length && !cfg.allow_destructive) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const norm = (s) => s.toLowerCase().replace(/[^a-z0-9' ]+/g, ' ').replace(/\s+/g, ' ').trim();
 
-// Glide the DOM cursor to an element's center (layout px = zoomed px / scale),
-// wait out the transition, and optionally pulse a click ripple.
-async function glideCursorTo(page, loc, { ripple = false } = {}) {
+// Action-event log (recorded phase only) → clips/NN.events.json, so a later
+// mixing step can lay click sounds exactly where the on-camera clicks landed.
+const events = [];
+let capturing = false;
+let captureT0 = 0;
+const logEvent = (kind, extra = {}) => {
+  if (capturing) events.push({ kind, t: Date.now() - captureT0, ...extra });
+};
+
+// Glide the DOM cursor to an element's center (layout px = zoomed px / scale)
+// and wait out the transition. Returns the element's box for coordinate input.
+async function glideCursorTo(page, loc) {
   const box = await loc.boundingBox().catch(() => null);
-  if (!box) return;
+  if (!box) return null;
   const x = (box.x + box.width / 2) / scale;
   const y = (box.y + box.height / 2) / scale;
-  await page.evaluate(([cx, cy, rip]) => {
+  await page.evaluate(([cx, cy]) => {
     const c = document.getElementById('__wtv_cursor');
     if (c) { c.style.left = cx + 'px'; c.style.top = cy + 'px'; }
-    if (rip) {
-      const r = document.createElement('div');
-      r.style.cssText = `position:fixed;left:${cx - 18}px;top:${cy - 18}px;width:36px;height:36px;` +
-        'border-radius:50%;border:3px solid #4f9dff;z-index:2147483646;pointer-events:none;' +
-        'opacity:.9;transform:scale(.4);transition:transform .45s ease-out,opacity .45s ease-out;';
-      document.body.appendChild(r);
-      requestAnimationFrame(() => { r.style.transform = 'scale(1.6)'; r.style.opacity = '0'; });
-      setTimeout(() => r.remove(), 600);
+  }, [x, y]).catch(() => {});
+  await sleep(650); // let the glide finish before the action lands
+  return box;
+}
+
+// Visible press feedback AT the moment the real click fires: ripple ring plus
+// a quick cursor press-nudge. Must be called right before the mouse click so
+// the viewer sees cursor-arrive → press → result in the correct order.
+async function pressEffect(page, box) {
+  const x = (box.x + box.width / 2) / scale;
+  const y = (box.y + box.height / 2) / scale;
+  await page.evaluate(([cx, cy, ac]) => {
+    const c = document.getElementById('__wtv_cursor');
+    if (c) {
+      c.style.transition += ',transform .09s ease-out';
+      c.style.transform = 'scale(.82)';
+      setTimeout(() => { c.style.transform = 'scale(1)'; }, 110);
     }
-  }, [x, y, ripple]).catch(() => {});
-  await sleep(600); // let the glide finish before the action lands
+    const r = document.createElement('div');
+    r.style.cssText = `position:fixed;left:${cx - 17}px;top:${cy - 17}px;width:34px;height:34px;` +
+      `border-radius:50%;border:3px solid ${ac};z-index:2147483646;pointer-events:none;` +
+      'opacity:.95;transform:scale(.35);transition:transform .4s ease-out,opacity .4s ease-out;';
+    document.body.appendChild(r);
+    requestAnimationFrame(() => { r.style.transform = 'scale(1.7)'; r.style.opacity = '0'; });
+    setTimeout(() => r.remove(), 550);
+  }, [x, y, accent]).catch(() => {});
+}
+
+// Scroll an element toward the viewport center only when it is not already
+// comfortably in view — avoids gratuitous page motion between actions.
+async function ensureCentered(page, loc) {
+  const scrolled = await loc.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const vh = window.innerHeight;
+    if (r.top < vh * 0.15 || r.bottom > vh * 0.85) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return true;
+    }
+    return false;
+  }).catch(() => false);
+  await sleep(scrolled ? 550 : 120);
 }
 
 // Cue → ms offset into the narration; monotonic search from the previous cue.
@@ -191,9 +239,7 @@ async function runAction(page, a) {
     case 'click': {
       const loc = page.locator(sel).first();
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
-      await loc.evaluate((el) =>
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' })).catch(() => {});
-      await sleep(350);
+      await ensureCentered(page, loc);
       if (a.highlight) {
         const box = await loc.boundingBox();
         if (box) {
@@ -203,13 +249,18 @@ async function runAction(page, a) {
           await page.screencast.showOverlay(
             `<div style="position:fixed;left:${hx - 6}px;top:${hy - 6}px;` +
             `width:${hw + 12}px;height:${hh + 12}px;` +
-            `border:3px solid #4f9dff;border-radius:8px;` +
+            `border:3px solid ${accent};border-radius:10px;` +
             `box-shadow:0 0 0 9999px rgba(0,0,0,.12);pointer-events:none;"></div>`,
             { duration: 1200 });
           await sleep(250);
         }
       }
-      await glideCursorTo(page, loc, { ripple: true });
+      // Coordinate input, never loc.click(): Playwright's actionability loop
+      // re-fires its own instant scrollIntoView on every retry, which fights
+      // the cinematic smooth scroll and visibly bounces the page on widgets
+      // that never pass the stability check (vue-multiselect). We already
+      // scrolled, glided, and verified visibility — click where the cursor is.
+      const box2 = await glideCursorTo(page, loc);
       // page.screencast FREEZES on renderer-initiated cross-document
       // navigations (verified empirically; API goto records fine). For links
       // that leave the current document: perform the click visually with its
@@ -220,11 +271,18 @@ async function runAction(page, a) {
       if (crossDoc) {
         await loc.evaluate((el) => el.addEventListener(
           'click', (e) => e.preventDefault(), { capture: true, once: true }));
-        await loc.click({ timeout: actionTimeout });
+      }
+      if (box2) {
+        await pressEffect(page, box2);
+        await page.mouse.click(box2.x + box2.width / 2, box2.y + box2.height / 2);
+      } else {
+        await loc.click({ force: true, timeout: 5000 });
+      }
+      logEvent('click');
+      if (crossDoc) {
         const target = new URL(href, page.url()).toString();
         await page.goto(target, { waitUntil: 'domcontentloaded' });
       } else {
-        await loc.click({ timeout: actionTimeout });
         await page.waitForLoadState('domcontentloaded', { timeout: actionTimeout }).catch(() => {});
       }
       await preflight(page);
@@ -233,19 +291,32 @@ async function runAction(page, a) {
     case 'type': {
       const loc = page.locator(sel).first();
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
-      await glideCursorTo(page, loc);
-      await loc.click();
-      await loc.pressSequentially(a.text || '', { delay: 60 });
+      await ensureCentered(page, loc);
+      const box = await glideCursorTo(page, loc);
+      if (box) {
+        await pressEffect(page, box);
+        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+      } else {
+        await loc.click({ force: true, timeout: 5000 });
+      }
+      logEvent('click');
+      await sleep(280); // let the focus/caret land so the click reads on camera
+      logEvent('type', { chars: (a.text || '').length, delay: 60 });
+      // keyboard.type targets the focused element (our click just focused it)
+      // and performs no element re-checks that could scroll the page mid-word.
+      await page.keyboard.type(a.text || '', { delay: 60 });
       break;
     }
     case 'hover': {
       const loc = page.locator(sel).first();
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
-      await loc.evaluate((el) =>
-        el.scrollIntoView({ behavior: 'smooth', block: 'center' })).catch(() => {});
-      await sleep(350);
-      await glideCursorTo(page, loc);
-      await loc.hover({ timeout: actionTimeout });
+      await ensureCentered(page, loc);
+      const box = await glideCursorTo(page, loc);
+      if (box) {
+        await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      } else {
+        await loc.hover({ force: true, timeout: 5000 });
+      }
       break;
     }
     case 'scroll': {
@@ -290,17 +361,35 @@ await context.addInitScript(`(() => {
     if (document.getElementById('__wtv_cursor') || !document.body) return;
     const c = document.createElement('div');
     c.id = '__wtv_cursor';
-    c.style.cssText = 'position:fixed;left:40%;top:40%;width:28px;height:28px;' +
+    c.style.cssText = 'position:fixed;left:40%;top:40%;width:28px;height:40px;' +
+      'margin-left:-5px;margin-top:-5px;' +  // NSCursor.arrow hotspot (5,5)
       'z-index:2147483647;pointer-events:none;' +
-      'transition:left .55s cubic-bezier(.25,.1,.25,1),top .55s cubic-bezier(.25,.1,.25,1);' +
-      'filter:drop-shadow(0 2px 4px rgba(0,0,0,.35));';
-    c.innerHTML = '<svg viewBox="0 0 24 24" width="28" height="28">' +
-      '<path d="M5 3l14 9-6 1 3 6-3 1.5-3-6L5 19z" fill="#fff" stroke="#111" stroke-width="1.4"/></svg>';
+      'transition:left .55s cubic-bezier(.25,.1,.25,1),top .55s cubic-bezier(.25,.1,.25,1);';
+    c.innerHTML = '<img src="data:image/png;base64,${CURSOR_PNG_B64}" ' +
+      'style="width:28px;height:40px;display:block" alt="">';
     document.body.appendChild(c);
   };
   document.addEventListener('DOMContentLoaded', mk);
   mk();
 })()`);
+if ((cfg.dismiss_selectors || []).length) {
+  // remove configured page elements (promo banners, CTAs) the moment they
+  // render — covers SPA content that appears after DOMContentLoaded.
+  const dsel = JSON.stringify(cfg.dismiss_selectors);
+  await context.addInitScript(`(() => {
+    const SEL = ${dsel};
+    const zap = () => SEL.forEach((s) =>
+      document.querySelectorAll(s).forEach((el) => el.remove()));
+    const arm = () => {
+      zap();
+      new MutationObserver(zap).observe(document.documentElement,
+        { childList: true, subtree: true });
+    };
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', arm);
+    } else { arm(); }
+  })()`);
+}
 if ((cfg.redact_selectors || []).length || (cfg.redact_patterns || []).length) {
   const selectors = JSON.stringify(cfg.redact_selectors || []);
   const patterns = JSON.stringify(cfg.redact_patterns || []);
@@ -345,6 +434,8 @@ await page.screencast.start({
   size: { width: width * scale, height: height * scale },
   quality: 90,
 });
+capturing = true;
+captureT0 = Date.now();
 if (cfg.chapter_cards) {
   await page.screencast.showChapter(scene.intent || `Scene ${sceneId}`);
 }
@@ -385,6 +476,8 @@ if (narrationMs && elapsed < narrationMs) {
 }
 
 await page.screencast.stop();
+writeFileSync(join(runDir, 'clips', `${sceneId}.events.json`),
+  JSON.stringify({ events }, null, 2));
 await browser.close();
 
 const size = statSync(outPath).size;
