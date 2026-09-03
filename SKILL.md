@@ -127,6 +127,7 @@ with `--force` to redo it.
 | 10 | Verify visuals | `grab_frames.py --run-dir <d>` + your vision check per scene | `verification.md` |
 | 11 | Auto-fix flagged scenes | **you** — bounded by `max_fix_iterations`; keep before/after frames in `verify/evidence/` | `verification.md` |
 | 12 | Deliver `output/final.mp4` | you | — |
+| 13 | Offer a thumbnail + end card (optional) | **you** — ask; hand the user a Claude Design prompt; integrate their exports with `image_card.py` + recompose | `brand-kit.md` |
 
 ### Step 3 — writing the script (your job)
 

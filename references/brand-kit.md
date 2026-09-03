@@ -70,3 +70,43 @@ American-English tutorial narration sounds.
   state created on camera in scene N must be pre-seeded in the DB for scene
   N+1 (e.g. via `wp eval` on the plugin's options). A viewer notices when a
   chip added in one scene vanishes in the next.
+
+## 5. Thumbnail & end card via Claude Design (optional, after delivery)
+
+After delivering the MP4, ask:
+
+> "Would you like a matching YouTube thumbnail and end card for this video?
+> If you have a design system in Claude Design, I'll write you a prompt to
+> paste there — bring back the exported images and I'll build them into the
+> video."
+
+If yes, generate a paste-ready prompt from the run (fill the bracketed
+parts from the script title and brand facts):
+
+    Using our design system, create two 1920x1080 images for a tutorial
+    video, in our YouTube thumbnail style:
+
+    1. TITLE CARD — headline "[VIDEO TITLE]", with our logo, a TUTORIAL
+       badge, and an illustration that represents [one-line concept, e.g.
+       "a sitemap list with one entry excluded"]. Left-aligned text
+       column, illustration on the right.
+    2. END CARD — "Thanks for watching" with our logo and [site domain],
+       plus space for a subscribe prompt.
+
+    Flat export, no rounded page corners; text must stay inside a 5%
+    margin from every edge (video-safe area).
+
+When the user brings the exports back (any folder path):
+
+1. `python3 scripts/image_card.py --run-dir <run> --image <title-card.png> --card intro`
+2. `python3 scripts/image_card.py --run-dir <run> --image <end-card.png> --card outro`
+3. Re-run `compose.py --force`, `mix_clicks.py`, and the captions mux —
+   the video now opens and closes on the supplied designs.
+4. Export the YouTube thumbnail from the same title card:
+   `ffmpeg -i <title-card.png> -vf scale=1280:720 <slug>-thumbnail.png`
+   and deliver it next to the MP4 (YouTube does NOT take the first frame
+   automatically — the thumbnail is uploaded separately; matching first
+   frame + thumbnail just makes the play transition seamless).
+
+Note: the intro dissolve (`transitions: "intro"`) works unchanged — the
+title card dissolves into the first screen exactly like the text card did.
