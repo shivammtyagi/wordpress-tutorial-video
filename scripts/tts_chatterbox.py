@@ -15,20 +15,13 @@ Differences from the Kokoro path:
       "tts_exaggeration": 0.4,   # 0..1 emotion intensity
       "tts_cfg": 0.35,           # generation-guidance weight
       "tts_gap_s": 0.30,         # silence between sentences
-      "tts_sentence_wpm": 172,   # per-SENTENCE articulated pace ceiling
-      "tts_max_attempts": 3,     # redraws per fast sentence before stretching it
-      "tts_target_wpm": 185,     # whole-scene backstop ceiling
+      "tts_target_wpm": 185,     # spoken pace ceiling; see below
+      "tts_max_attempts": 2,     # regenerations before pitch-safe stretch
       "tts_voice_prompt": null   # optional path to a reference WAV to clone
-  * Pace control is per SENTENCE, not per scene. Chatterbox is stochastic per
-    generation and reads briskly (~200-260 wpm on some draws); a scene-average
-    gate hides a 260 wpm sentence behind a slow neighbor — the exact sentence a
-    reviewer hears as "rushed". Each sentence draw is edge-silence-trimmed (so
-    random trailing silence cannot dilute the measurement), measured, redrawn
-    up to tts_max_attempts times if over its threshold, then pitch-safe
-    atempo-stretched (floor 0.85x) if still hot. Short sentences get a relaxed
-    threshold (thr = sentence_wpm * (1 + 0.06 * max(0, 6 - words))) — brief
-    interjections naturally measure fast. A whole-scene stretch to
-    tts_target_wpm remains as the final backstop.
+  * Pace control: Chatterbox tends to read briskly (~200-225 wpm) and cfg_weight
+    barely moves it. Scenes measuring above tts_target_wpm are regenerated up to
+    tts_max_attempts times; a scene still over the target is slowed with a
+    pitch-preserving ffmpeg atempo stretch (never below 0.85x).
   * Generation is stochastic: the audio gate (verify_scenes.py) remains the
     arbiter; regenerate failing scenes with --force --scene-id NN.
 
@@ -84,8 +77,7 @@ def main():
     cfg_weight = float(cfg.get("tts_cfg", 0.35))
     gap_s = float(cfg.get("tts_gap_s", 0.30))
     target_wpm = float(cfg.get("tts_target_wpm", 185))
-    sentence_wpm = float(cfg.get("tts_sentence_wpm", 172))
-    max_attempts = int(cfg.get("tts_max_attempts", 3))
+    max_attempts = int(cfg.get("tts_max_attempts", 2))
     voice_prompt = cfg.get("tts_voice_prompt") or None
 
     audio_dir = os.path.join(args.run_dir, "audio")
@@ -115,84 +107,6 @@ def main():
         wav = model.generate(text, **kwargs)
         return wav.squeeze(0).cpu().numpy()
 
-    def trim_edges(audio, lead_keep=0.05, tail_keep=0.10, thresh=0.0076):
-        """Cut lead/tail silence from one draw so wpm measures speech, not air."""
-        win = max(1, int(0.02 * sr))
-        n = (len(audio) // win) * win
-        if n == 0:
-            return audio
-        env = np.abs(audio[:n]).reshape(-1, win).max(axis=1)
-        loud = env > thresh
-        if not loud.any():
-            return audio
-        first = int(np.argmax(loud))
-        last = len(loud) - 1 - int(np.argmax(loud[::-1]))
-        start = max(0, first * win - int(lead_keep * sr))
-        end = min(len(audio), (last + 1) * win + int(tail_keep * sr))
-        return audio[start:end]
-
-    def stretch(audio, factor):
-        """Pitch-preserving slow-down of one float32 buffer via ffmpeg atempo."""
-        import subprocess
-        import tempfile
-        pcm = (np.clip(audio, -1, 1) * 32767).astype("<i2").tobytes()
-        with tempfile.TemporaryDirectory() as td:
-            a, b = os.path.join(td, "a.wav"), os.path.join(td, "b.wav")
-            _write_wav(a, pcm, sr)
-            subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", a,
-                            "-af", f"atempo={factor:.3f}", b], check=True)
-            with wave.open(b, "rb") as w:
-                out = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
-        return out.astype(np.float32) / 32767.0
-
-    STRETCH_FLOOR = 0.80  # atempo below this audibly smears speech
-
-    def paced_sentence(sent, allow_split=True):
-        """Draw a sentence until it speaks at or under its threshold.
-
-        Escalation for a sentence that keeps drawing hot: (1) redraws pick the
-        slowest take, (2) a pitch-safe stretch down to STRETCH_FLOOR, (3) for a
-        clause-heavy sentence the stretch cannot fix, re-synthesize it clause
-        by clause with short natural pauses — how a narrator actually delivers
-        a caveat — pacing each clause independently.
-        """
-        words = max(1, len(sent.split()))
-        thr = sentence_wpm * (1 + 0.06 * max(0, 6 - words))
-        # short sentences draw hot and cannot clause-split — buy extra draws
-        # to find a calm take instead of leaning on the stretch floor.
-        attempts = max(1, max_attempts) + (2 if words < 8 else 0)
-        best = None
-        for _ in range(attempts):
-            audio = trim_edges(synth(sent))
-            dur = len(audio) / sr
-            wpm = words / dur * 60 if dur > 0.05 else thr
-            if best is None or wpm < best[1]:
-                best = (audio, wpm)
-            if wpm <= thr:
-                break
-        audio, wpm = best
-        if wpm <= thr:
-            return audio, wpm
-        if thr / wpm >= STRETCH_FLOOR:
-            audio = stretch(audio, thr / wpm)
-            return audio, words / (len(audio) / sr) * 60
-        clauses = [c.strip() for c in re.split(r"(?<=[,;]) ", sent) if c.strip()]
-        if allow_split and len(clauses) > 1 and words >= 8:
-            pieces = []
-            for ci, clause in enumerate(clauses):
-                caudio, _ = paced_sentence(clause, allow_split=False)
-                pieces.append(caudio)
-                if ci < len(clauses) - 1:
-                    pieces.append(np.zeros(int(0.22 * sr), dtype=caudio.dtype))
-            audio = np.concatenate(pieces)
-            wpm = words / (len(audio) / sr) * 60
-            if wpm > thr * 1.05:
-                audio = stretch(audio, max(STRETCH_FLOOR, thr / wpm))
-                wpm = words / (len(audio) / sr) * 60
-            return audio, wpm
-        audio = stretch(audio, STRETCH_FLOOR)
-        return audio, words / (len(audio) / sr) * 60
-
     for scene in script["scenes"]:
         sid = scene["id"]
         if args.scene_id and sid != args.scene_id:
@@ -200,26 +114,33 @@ def main():
         tts_text = norm.for_ref(scene["narration"], {})
         ref_text = tts_text
         key = hashlib.sha256(
-            f"chatterbox-v2|{voice_prompt}|{exaggeration}|{cfg_weight}|{gap_s}|{sentence_wpm}|{max_attempts}|{tts_text}"
+            f"chatterbox|{voice_prompt}|{exaggeration}|{cfg_weight}|{gap_s}|{tts_text}"
             .encode()).hexdigest()
         cached = os.path.join(cache_dir, f"{key}.wav")
         out = os.path.join(audio_dir, f"{sid}.wav")
 
         if not os.path.exists(cached) or args.force:
-            sentences = [s.strip() for s in _SENT.split(tts_text) if s.strip()]
-            pieces, sent_wpms = [], []
-            for si, sent in enumerate(sentences):
-                audio, wpm = paced_sentence(sent)
-                sent_wpms.append(wpm)
-                pieces.append(audio)
-                if si < len(sentences) - 1:
-                    pieces.append(np.zeros(int(gap_s * sr), dtype=audio.dtype))
-            full = np.concatenate(pieces) if pieces else np.zeros(sr)
             words = len(tts_text.split())
-            wpm = words / (len(full) / sr) * 60
-            if sent_wpms:
-                print(f"tts: scene {sid} sentence rates: "
-                      + " ".join(f"{w:.0f}" for w in sent_wpms) + " wpm")
+            best = None
+            for attempt in range(max(1, max_attempts)):
+                sentences = [s.strip() for s in _SENT.split(tts_text) if s.strip()]
+                pieces = []
+                for si, sent in enumerate(sentences):
+                    audio = synth(sent)
+                    pieces.append(audio)
+                    if si < len(sentences) - 1:
+                        pieces.append(np.zeros(int(gap_s * sr), dtype=audio.dtype))
+                full = np.concatenate(pieces) if pieces else np.zeros(sr)
+                wpm = words / (len(full) / sr) * 60
+                if best is None or wpm < best[1]:
+                    best = (full, wpm)
+                if wpm <= target_wpm * 1.02:
+                    break
+                print(f"tts: scene {sid} attempt {attempt + 1} at {wpm:.0f} wpm "
+                      f"(target {target_wpm:.0f}) — retrying" if attempt + 1 < max_attempts
+                      else f"tts: scene {sid} still {wpm:.0f} wpm after "
+                           f"{attempt + 1} attempts — will stretch")
+            full, wpm = best
             pcm = (np.clip(full, -1, 1) * 32767).astype("<i2").tobytes()
             _write_wav(cached, pcm, sr)
             if wpm > target_wpm * 1.02:
