@@ -101,3 +101,21 @@ spelling) timed by the per-scene word offsets + `output/timeline.json` — so
 captions never mishear a product name. `verify/transcript.json`
 (`transcribe_whisperx.py`, whole-video) remains as a fallback path and an
 optional final spot-check.
+
+## v3 additions: timing, end-state, and continuity checks
+
+- **Click timing vs narration**: the recorder writes `clips/NN.events.json`
+  (ms offsets of every on-camera click/type). After recording, check each
+  click lands inside its narration window — a click later than
+  `narration + tail_cap` will be CUT from the final clip. If it is late,
+  move the cue earlier or raise that scene's `tail_cap_s`.
+- **End-state frames**: the mid-scene frame passing is not enough — grab the
+  LAST second of scenes whose click produces a visible result (a chip added,
+  a toast shown) and confirm the result got screen time.
+- **Continuity between scenes**: scenes record in fresh browsers from DB
+  baselines. Verify that state created on camera in scene N is present in
+  scene N+1's baseline (nothing "vanishes" between cuts).
+- **Silence profile**: `ffmpeg -af silencedetect=noise=-38dB:d=1.2` on the
+  final mux — the only long silences should be the intro/outro cards and
+  intentional page-load beats. Anything else is a pacing bug (check tail
+  caps and trim_audio).

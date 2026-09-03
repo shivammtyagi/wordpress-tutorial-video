@@ -51,17 +51,30 @@ Create the run directory `runs/<slug>-<hash>/` and write `config.json`:
   "wp_user_env": "WP_ADMIN_USER",            // env var holding the username
   "wp_pass_env": "WP_ADMIN_PASS",            // env var holding the password
   "resolution": "1920x1080",                 // delivery resolution
-  "capture_scale": 2,                        // deviceScaleFactor; master = resolution × scale
   "deliver_4k": false,                       // also write clips/output at master resolution
   "fps": 30,
-  "voice": "af_heart",
-  "speed": 0.9,                              // Kokoro speaking speed (0.85–0.95 = tutorial pace)
-  "lexicon": {},                             // extra pronunciation overrides (term → IPA)
+  "engine": "chatterbox",                    // chatterbox (default, natural prosody) | kokoro (fast fallback)
+  "tts_exaggeration": 0.4,                   // chatterbox: emotion intensity 0..1
+  "tts_cfg": 0.35,                           // chatterbox: generation-guidance weight
+  "tts_gap_s": 0.30,                         // chatterbox: pause between sentences
+  "tts_target_wpm": 185,                     // pace ceiling; regenerate then atempo-stretch to hit it
+  "tts_max_attempts": 2,                     // regenerations before the pitch-safe stretch
+  "tts_voice_prompt": null,                  // optional reference WAV to clone (get consent!)
+  "voice": "af_heart",                       // kokoro fallback voice
+  "speed": 1.0,                              // kokoro speaking speed (1.0 sounds most natural)
+  "lexicon": {},                             // kokoro pronunciation overrides (term → IPA)
   "asr_model": "small.en",                   // audio-gate WhisperX model ("large-v3-turbo" = max accuracy)
+  "accent_color": "#2271b1",                 // highlight rings + click ripples (use the brand color)
   "chapter_cards": false,                    // 2s blurred card per scene (off: MP4 chapters instead)
-  "transitions": "none",                     // none | fade
+  "transitions": "intro",                    // intro (one eased dissolve after the title card) | none | fade
+  "intro_seconds": 3.0,
+  "outro_seconds": 2.5,
+  "intro_subtitle": "A step-by-step WordPress tutorial",
+  "tail_cap_s": 0.4,                         // max still-frame tail after narration (per-scene: tail_cap_s on the scene)
+  "dismiss_selectors": [],                   // page elements to remove while recording (promo banners, NPS modals)
   "ignore_https_errors": true,               // self-signed local sites (Local, Laravel Valet…)
   "action_timeout_ms": 10000,                // fail-fast selector waits
+  "capture_scale": 1,                        // 1 = native layout (safe); 2 = 4K master via CSS zoom — see caveat below
   "dismiss_notices": true,                   // remove .notice/.update-nag before recording
   "allow_destructive": false,                // guard scenes clicking delete/deactivate/…
   "redact_selectors": [],                    // blur these elements while recording
@@ -74,6 +87,21 @@ Create the run directory `runs/<slug>-<hash>/` and write `config.json`:
 ```
 
 `slug_for()` and the run-dir/state helpers live in `scripts/lib/run_dir.py`.
+
+## Brand kit — ask FIRST
+
+Before creating the run, ask the user:
+
+> **"Do you have any brand assets you'd like this video to use — a logo, brand
+> colors, fonts? And is there an existing video or YouTube channel whose
+> narration style I should match?"**
+
+- With brand assets: build branded intro/outro cards (run's `assets/card_intro.html`
+  / `card_outro.html`, fonts + logo embedded as data URIs), set `accent_color`
+  to the brand color, and study 1–2 of their video transcripts to write the
+  narration in their house style. Full recipe: `references/brand-kit.md`.
+- Without: the default card template and WP-admin-blue accents are used; write
+  the narration in the generic house style (also in `brand-kit.md`).
 
 ## The pipeline
 
@@ -88,12 +116,14 @@ with `--force` to redo it.
 | 2 | Fetch & parse the doc | `python3 scripts/fetch_doc.py --run-dir <d>` | — |
 | 3 | Write `script.json` | **you** — see below | `scene-schema.md` |
 | 4 | Self-review the script | **you** — clarity, 155–165 wpm pacing, 4–12 scenes | `scene-schema.md` |
-| 5 | Voiceover + durations | `tts_kokoro.py --run-dir <d>` (venv) | `voices.md` |
-| 5b | **Audio gate** — per-scene WER + word offsets | `verify_scenes.py --run-dir <d>` (venv); on failure regenerate that scene's audio (`tts_kokoro.py --force`) and re-run `verify_scenes.py --scene-id NN`, at most `max_fix_iterations` times | `verification.md` |
+| 5 | Voiceover + durations | `tts_chatterbox.py --run-dir <d>` (.venv-cbx; default) or `tts_kokoro.py` (.venv; fallback) | `voices.md` |
+| 5a | Trim silences + compress pauses | `trim_audio.py --run-dir <d>` (venv) — run BEFORE the gate | `voices.md` |
+| 5b | **Audio gate** — per-scene WER + word offsets | `verify_scenes.py --run-dir <d>` (venv); on failure regenerate that scene's audio (engine script `--force --scene-id NN`), re-trim, and re-run `verify_scenes.py --scene-id NN`, at most `max_fix_iterations` times | `verification.md` |
 | 6 | Discover selectors + plan phases/cues | **you** — explore the live site | `selector-discovery.md` |
 | 7 | Record each scene | `node scripts/record_scene.mjs --run-dir <d> --scene-id NN --base-url <site>` | `recording-tuning.md` |
 | 8 | Post-process each clip | `postprocess_clip.py --run-dir <d> --scene-id NN [--zoom]` | `ffmpeg-recipes.md` |
 | 9 | Compose (timeline, chapters, captions, faststart) | `compose.py --run-dir <d>` | `ffmpeg-recipes.md` |
+| 9b | Mix click sounds at recorded event times | `mix_clicks.py --run-dir <d>` | `ffmpeg-recipes.md` |
 | 10 | Verify visuals | `grab_frames.py --run-dir <d>` + your vision check per scene | `verification.md` |
 | 11 | Auto-fix flagged scenes | **you** — bounded by `max_fix_iterations`; keep before/after frames in `verify/evidence/` | `verification.md` |
 | 12 | Deliver `output/final.mp4` | you | — |
@@ -102,8 +132,14 @@ with `--force` to redo it.
 
 Read `doc.md`. Produce `script.json` per `references/scene-schema.md`:
 - One spoken idea per scene; 4–12 scenes for a single doc.
-- `narration`: one or two clear, beginner-friendly sentences (155–165 words/min
-  reads right; narration explains WHY, the screen shows WHAT).
+- `narration`: one or two clear, beginner-friendly sentences in the channel's
+  spoken house style — first-person play-by-play ("I'm going to click…",
+  "let's head on over"), contractions, screen-anchored phrases ("right here"),
+  a branded opener on scene 1 and a docs/support sign-off on the last scene.
+  Narration explains WHY, the screen shows WHAT. Avoid commas that force a
+  pause mid-thought ("a short, inviting summary" reads as a stall — drop the
+  comma in the narration text); phrase questions so they carry rising
+  intonation ("Want to see everything?" not "Prefer to see everything.").
 - `intent`: the scene's plain-language goal (becomes the MP4 chapter title).
 - `actions`: ordered steps with **human-language `target`s** and `selector: null`
   (discovery fills selectors). Mark navigation/login-adjacent steps
@@ -144,12 +180,14 @@ failing.
 
 ## Defaults
 
-1080p delivery from a 2x (4K) master · 30fps · 16:9 · captions on (soft
-`mov_text` track from script text + alignments; `--burn-captions` if available)
-· Kokoro `af_heart` @ speed 0.9 · chapter cards off (MP4 chapter metadata
-instead) · plain-cut transitions (`"fade"` optional) · Chromium-rendered
-intro/outro cards · native screencast cursor + click highlights · verify `full`
-· `max_fix_iterations` 2.
+1080p delivery, native capture (`capture_scale: 1`) · 30fps · 16:9 · captions
+on (soft `mov_text` track, phrase-aware cues from script text + alignments) ·
+Chatterbox narration paced to ≤185 wpm, silence-trimmed · hard cuts with ONE
+eased dissolve after the intro card (`transitions: "intro"`); audio is never
+crossfaded · genuine macOS cursor with press ripple at the true click instant ·
+click sounds mixed at recorded event times · scene tails capped at 0.4s
+(`tail_cap_s`; raise per-scene for page loads) · Ken Burns zoom ≤1.08x ·
+branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
 
 ## Safety
 
@@ -185,6 +223,26 @@ intro/outro cards · native screencast cursor + click highlights · verify `full
   `check_env.sh --deep` to confirm which path is active.
 - **Audio gate keeps failing on a product name** → add the term to
   `references/lexicon.json` or the run's `lexicon` config (term → IPA).
+
+- **Chatterbox venv fails with `PerthImplicitWatermarker` / `pkg_resources` errors**
+  → the venv needs `setuptools<81` (bootstrap pins it); newer setuptools removed
+  `pkg_resources`, which resemble-perth still imports.
+- **bootstrap creates an x86_64 venv on Apple Silicon** (Intel Homebrew under
+  Rosetta) → PyTorch has no macOS x86_64 wheels; bootstrap pins an arm64
+  CPython and verifies the venv arch, failing loudly instead of silently.
+- **Dropdown menus render collapsed/truncated on camera** → you are recording
+  with `capture_scale: 2`. The 4K master works by CSS-zooming the document,
+  and JS-positioned dropdowns (vue-multiselect etc.) mis-measure under zoom.
+  Use `capture_scale: 1` (the default) for any flow that opens dropdowns.
+  (True `deviceScaleFactor` capture doesn't help: Playwright's screencast
+  records CSS pixels and letterboxes larger sizes — verified empirically.)
+- **The page "randomly scrolls" around clicks** → never use Playwright
+  `loc.click()` in the recorder: its actionability retries re-fire
+  scrollIntoView and fight the cinematic scroll. The recorder clicks by mouse
+  coordinates after its own scroll + glide (already the default here).
+- **A promo banner / NPS modal photobombs the recording** → add its selector to
+  `dismiss_selectors` (removed the instant it renders), and dismiss it
+  persistently at the source when possible (options table / usermeta).
 
 ## Limitations
 

@@ -115,3 +115,47 @@ If a project needs 60 fps or a higher bitrate than screencast provides, replace
 the recorder's capture with a CDP screencast that pipes JPEG frames to ffmpeg
 (`Page.startScreencast` → `image2pipe`), or use screencast's `onFrame` callback.
 The default screencast path is preferred for its built-in cursor/overlay support.
+
+## Interaction mechanics (v3): coordinate input + visible presses
+
+Never drive on-camera actions through `loc.click()` / `loc.hover()`.
+Playwright's actionability loop re-fires an instant scrollIntoView on every
+retry; on widgets that never pass its stability check (vue-multiselect and
+friends), that loop visibly bounces the page and can delay the real click by
+the full timeout — the click then lands after its narration cue, or gets cut
+off entirely by the tail cap.
+
+The recorder instead: waits for visibility (full timeout — elements that
+legitimately take time still get it) → `ensureCentered` (smooth-scrolls only
+when the element is outside the middle 70% of the viewport) → glides the DOM
+cursor → fires the press effect (accent-colored ripple + a cursor press-nudge)
+**at the same instant** as a `page.mouse.click()` at the element's box center →
+types through `page.keyboard` (no element re-checks mid-word). The result on
+camera: cursor travels, visibly presses, the UI reacts — and `mix_clicks.py`
+lays the click sound at that exact logged moment.
+
+## Capture scale: the 4K master trade-off
+
+`capture_scale: 2` records a 3840×2160 master by CSS-zooming the document
+inside a 4K viewport. Sharp — but JS-positioned dropdowns mis-measure under
+zoom (layout px vs zoomed px) and can render collapsed. Default is
+`capture_scale: 1` (native layout, always correct). Use 2 only for flows with
+no positioned dropdowns, and check `verify/frames/` carefully. True
+`deviceScaleFactor` capture is NOT a fix: Playwright's screencast records CSS
+pixels and letterboxes larger requested sizes (verified empirically).
+
+## Cursor
+
+`assets/cursor-macos.png` is the genuine macOS arrow (extracted from
+NSCursor.arrow at 5x, hotspot 5,5, logical 28x40). The recorder injects it as
+a DOM cursor with an eased glide; `accent_color` styles the ripple and
+highlight rings. Replace the PNG to change platforms (keep the hotspot
+margins in sync in record_scene.mjs).
+
+## Removing page noise: dismiss_selectors
+
+`dismiss_selectors` (config) removes matching elements the moment they render
+— a MutationObserver armed at document start, so SPA banners that appear
+seconds after load (NPS surveys, "connect X" CTAs, helper mascots) never
+reach a frame. Prefer persistent dismissals at the source (plugin options,
+usermeta) when they exist; use this for the ones that come back anyway.

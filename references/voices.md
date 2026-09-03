@@ -63,3 +63,29 @@ contract as `tts_kokoro.py` (write `audio/NN.wav` + `audio/durations.json` +
 `audio/tts_meta.json`) via a sibling `tts_chatterbox.py` and the rest of the
 pipeline is unchanged. Start with Kokoro; switch once the pipeline is proven
 for your content.
+
+## Chatterbox — the default narration engine
+
+Kokoro reads cleanly but flat; questions sound like statements and long
+tutorials feel robotic. **Chatterbox** (Resemble AI, MIT — fine for commercial
+use) has real prosody and is the default engine: `scripts/tts_chatterbox.py`,
+running in its own venv (`.venv-cbx`, created by bootstrap; note the
+`setuptools<81` pin for resemble-perth). Same output contract as the Kokoro
+script, so the audio gate, captions, and recorder cues work unchanged.
+
+Knobs (config.json): `tts_exaggeration` (0.4 default — calm tutorial),
+`tts_cfg` (0.35), `tts_gap_s` (0.30 between sentences), `tts_target_wpm`
+(185) and `tts_max_attempts` (2). Chatterbox naturally reads ~200–225 wpm and
+cfg barely moves that, so the script regenerates fast scenes and then applies
+a pitch-preserving `atempo` stretch (never below 0.85x) to land the target.
+Generation is stochastic — the WER gate stays the arbiter; regenerate failing
+scenes with `--force --scene-id NN`.
+
+Voice cloning: pass `tts_voice_prompt` (a ~10s clean reference WAV) to speak
+in a specific voice — for a brand channel's narrator, get the narrator's
+explicit consent first. Runs on Apple Silicon via MPS at roughly 5–6x
+realtime cost (a 90s narration synthesizes in ~8–10 minutes).
+
+Note on Kokoro `speed`: 1.0 sounds most natural; the old 0.9 guidance made
+narration draggy. Prefer trimming silences (`trim_audio.py`) over slowing
+speech.
