@@ -45,6 +45,12 @@ def main():
     ap.add_argument("--resolution", default=None)
     ap.add_argument("--fps", type=int, default=None)
     ap.add_argument("--zoom", action="store_true", help="apply a slow Ken Burns zoom toward the focus box")
+    ap.add_argument("--tail-pad", type=float, default=0.0,
+                    help="extra seconds of last-frame hold beyond max(clip, narration); "
+                         "gives crossfade transitions room so they never clip narration")
+    ap.add_argument("--tail-cap", type=float, default=None,
+                    help="cap the still tail after the narration ends: clip runs at most "
+                         "narration + cap seconds (and at least narration + 0.15)")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     _require_ffmpeg()
@@ -73,7 +79,21 @@ def main():
     durations = json.load(open(os.path.join(args.run_dir, "audio", "durations.json")))
     narration = float(durations.get(sid, 0))
     clip_len = probe_duration(raw)
-    target = max(clip_len, narration)
+    target = max(clip_len, narration) + max(0.0, args.tail_pad)
+    # tail cap priority: CLI flag > per-scene script field > config default.
+    tail_cap = args.tail_cap
+    if tail_cap is None:
+        script_path = next((os.path.join(args.run_dir, n) for n in
+                            ("script.discovered.json", "script.json")
+                            if os.path.exists(os.path.join(args.run_dir, n))), None)
+        if script_path:
+            scene = next((s for s in json.load(open(script_path)).get("scenes", [])
+                          if s.get("id") == sid), {})
+            tail_cap = scene.get("tail_cap_s")
+    if tail_cap is None:
+        tail_cap = cfg.get("tail_cap_s")
+    if tail_cap is not None and narration > 0:
+        target = min(max(target, narration + 0.15), narration + max(float(tail_cap), 0.15))
 
     dw, dh = (int(x) for x in resolution.split("x"))
     focus = json.load(open(focus_path)) if os.path.exists(focus_path) else {}

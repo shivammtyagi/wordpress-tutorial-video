@@ -55,25 +55,28 @@ def probe_duration(path):
     return float(out.strip())
 
 
-def _render_card_png(title, subtitle, png, resolution):
+def _render_card_png(title, subtitle, png, resolution, template=None):
     """Render a card to PNG via Chromium (portable; no ffmpeg drawtext needed)."""
     w, h = resolution.split("x")
+    cmd = [
+        "node", os.path.join(HERE, "render_card.mjs"),
+        "--title", title, "--subtitle", subtitle, "--out", png,
+        "--width", w, "--height", h,
+    ]
+    if template:
+        cmd += ["--template", template]
     try:
-        subprocess.run([
-            "node", os.path.join(HERE, "render_card.mjs"),
-            "--title", title, "--subtitle", subtitle, "--out", png,
-            "--width", w, "--height", h,
-        ], check=True)
+        subprocess.run(cmd, check=True)
         return os.path.exists(png)
     except Exception as e:
         print(f"compose: card render skipped ({e}); using plain card")
         return False
 
 
-def _card(text, out, resolution, fps, seconds=2.0, subtitle=""):
+def _card(text, out, resolution, fps, seconds=2.0, subtitle="", template=None):
     w, h = resolution.split("x")
     png = out + ".png"
-    if _render_card_png(text, subtitle, png, resolution):
+    if _render_card_png(text, subtitle, png, resolution, template):
         vin = ["-loop", "1", "-i", png]
     else:
         # fallback: plain colored background (no text) — still a valid segment
@@ -125,6 +128,32 @@ def _write_chapters(path, timeline, title):
         f.write("\n".join(lines) + "\n")
 
 
+def _concat_intro_fade(segpaths, out, fps, duration=1.0):
+    """Eased dissolve ONLY between the first two segments (intro card → first
+    scene); every other boundary is a hard cut (stream-copy concat). Audio is
+    never faded: the intro card is silent and the first scene's narration is
+    simply time-shifted to the overlapped start."""
+    d0 = probe_duration(segpaths[0])
+    offset = max(0.0, d0 - duration)
+    head = out + ".head.mp4"
+    delay = int(round(offset * 1000))
+    subprocess.run([
+        "ffmpeg", "-y", "-i", segpaths[0], "-i", segpaths[1],
+        "-filter_complex",
+        f"[0:v][1:v]xfade=transition=fade:duration={duration}:offset={offset:.3f}[v];"
+        f"[1:a]adelay={delay}|{delay}[a]",
+        "-map", "[v]", "-map", "[a]",
+        *X264, "-r", str(fps), *AUD, head,
+    ], check=True)
+    listfile = out + ".list.txt"
+    with open(listfile, "w") as f:
+        f.write(f"file '{os.path.abspath(head)}'\n")
+        for p in segpaths[2:]:
+            f.write(f"file '{os.path.abspath(p)}'\n")
+    subprocess.run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", listfile,
+                    "-c", "copy", out], check=True)
+
+
 def _concat_fade(segpaths, out, fps, duration=0.5):
     # xfade/acrossfade chain requires a re-encode; used only when transitions=fade
     inputs = []
@@ -165,6 +194,8 @@ def main():
     resolution = cfg.get("resolution", "1920x1080")
     fps = int(cfg.get("fps", 30))
     fade = cfg.get("transitions") == "fade"
+    intro_fade = cfg.get("transitions") == "intro"
+    intro_fade_dur = 1.0
 
     script_path = next((os.path.join(args.run_dir, n) for n in
                         ("script.discovered.json", "script.json")
@@ -182,9 +213,16 @@ def main():
     work = tempfile.mkdtemp(prefix="compose_", dir=out_dir)
     segments = []  # (kind, id, intent, path)
 
+    def _tmpl(name):
+        p = os.path.join(args.run_dir, "assets", name)
+        return p if os.path.exists(p) else None
+
     if not args.no_intro:
         intro = os.path.join(work, "intro.mp4")
-        _card(title, intro, resolution, fps)
+        _card(title, intro, resolution, fps,
+              seconds=float(cfg.get("intro_seconds", 2.0)),
+              subtitle=cfg.get("intro_subtitle", ""),
+              template=_tmpl("card_intro.html"))
         segments.append(("intro", None, None, intro))
 
     scene_clips = []
@@ -201,15 +239,23 @@ def main():
 
     if not args.no_intro:
         outro = os.path.join(work, "outro.mp4")
-        _card("Thanks for watching", outro, resolution, fps)
+        _card("Thanks for watching", outro, resolution, fps,
+              seconds=float(cfg.get("outro_seconds", 2.0)),
+              subtitle=cfg.get("outro_subtitle", ""),
+              template=_tmpl("card_outro.html"))
         segments.append(("outro", None, None, outro))
 
     # timeline from actual segment durations (fade overlaps shift later starts)
-    overlap = 0.5 if fade else 0.0
     t, timeline = 0.0, {"segments": []}
     for i, (kind, sid, intent, path) in enumerate(segments):
         d = probe_duration(path)
-        start = max(0.0, t - overlap * i)
+        if fade:
+            shift = 0.5 * i
+        elif intro_fade and i >= 1:
+            shift = intro_fade_dur  # single overlap at the intro boundary
+        else:
+            shift = 0.0
+        start = max(0.0, t - shift)
         timeline["segments"].append({"kind": kind, "id": sid, "intent": intent,
                                      "start": round(start, 3), "end": round(start + d, 3)})
         t += d
@@ -221,7 +267,10 @@ def main():
                         "--run-dir", args.run_dir], check=False)
 
     concat_out = os.path.join(work, "concat.mp4")
-    if fade and len(segments) > 1:
+    if intro_fade and len(segments) > 1:
+        _concat_intro_fade([s[3] for s in segments], concat_out, fps,
+                           duration=intro_fade_dur)
+    elif fade and len(segments) > 1:
         _concat_fade([s[3] for s in segments], concat_out, fps)
     else:
         listfile = os.path.join(work, "list.txt")
