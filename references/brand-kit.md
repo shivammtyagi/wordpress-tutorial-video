@@ -80,21 +80,36 @@ After delivering the MP4, ask:
 > paste there — bring back the exported images and I'll build them into the
 > video."
 
-If yes, generate a paste-ready prompt from the run (fill the bracketed
+Better than image exports: if the user can download their design system
+as a ZIP (Claude Design supports this), ask for that instead — it often
+contains a reusable "YouTube cards" pattern, full-res HTML sources you can
+render yourself at exactly 1920x1080 with Playwright (element-screenshot
+each card frame after `document.fonts.ready`), and the brand tokens/fonts.
+Rendering the HTML beats using preview PNG exports, which are frequently
+downscaled. Verify the render at full size — fixed-position layouts
+authored small can wrap or collide at 1920px; fix such an issue with a
+minimal style override at render time, never by editing their system.
+
+Otherwise generate a paste-ready prompt from the run (fill the bracketed
 parts from the script title and brand facts):
 
-    Using our design system, create two 1920x1080 images for a tutorial
-    video, in our YouTube thumbnail style:
+    Using our design system's YouTube cards pattern (or thumbnail style),
+    create two images for a tutorial video, EXPORTED AT 1920x1080:
 
-    1. TITLE CARD — headline "[VIDEO TITLE]", with our logo, a TUTORIAL
-       badge, and an illustration that represents [one-line concept, e.g.
-       "a sitemap list with one entry excluded"]. Left-aligned text
-       column, illustration on the right.
+    1. TITLE CARD — headline "[VIDEO TITLE]", a short benefit subtitle
+       ("[one line: what the viewer gets]"), our logo, a TUTORIAL badge,
+       and an illustration that represents [one-line concept, e.g. "a
+       sitemap URL list with one entry marked excluded"]. Left-aligned
+       text column, illustration on the right.
     2. END CARD — "Thanks for watching" with our logo and [site domain],
-       plus space for a subscribe prompt.
+       a subscribe prompt, and reserved zones for YouTube end-screen
+       elements (next video + subscribe) marked as empty space.
 
-    Flat export, no rounded page corners; text must stay inside a 5%
-    margin from every edge (video-safe area).
+    Flat export, no rounded page corners; text inside a 5% safe margin.
+
+When integrating an end card that reserves YouTube end-screen zones, set
+`outro_seconds` to at least 6 — YouTube end-screen elements need 5-20s of
+runway at the end of the video.
 
 When the user brings the exports back (any folder path):
 
