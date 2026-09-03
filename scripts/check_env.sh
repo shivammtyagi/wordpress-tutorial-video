@@ -55,6 +55,21 @@ for pkg in kokoro whisperx; do
   printf "%-14s %-14s %s\n" "$pkg" "-" "$st"
 done
 
+# Chatterbox venv (default narration engine, created by bootstrap.sh)
+VENV_CBX="$(cd "$(dirname "$0")/.." && pwd)/.venv-cbx"
+cbx_status="MISSING"; cbx_ver="-"
+if [ -x "$VENV_CBX/bin/python" ]; then
+  cbx_ver="$("$VENV_CBX/bin/python" --version 2>/dev/null | awk '{print $2}')"
+  if "$VENV_CBX/bin/python" -c "import chatterbox" >/dev/null 2>&1; then
+    cbx_status="ok"
+  else
+    missing=$((missing+1))
+  fi
+else
+  missing=$((missing+1))
+fi
+printf "%-14s %-14s %s\n" "venv-cbx(py)" "${cbx_ver:0:14}" "$cbx_status"
+
 # Playwright >= 1.59 check (via npx; may be slow on first run)
 pw_status="MISSING"; pw_ver="-"
 if pw_raw="$(npx --yes playwright --version 2>/dev/null)"; then
