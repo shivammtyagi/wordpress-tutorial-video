@@ -18,8 +18,8 @@ def test_basic_srt():
     words = [{"word": "Hello", "start": 0.0, "end": 0.5},
              {"word": "world", "start": 0.5, "end": 1.0}]
     srt = words_to_srt(words, max_chars=40)
-    # cue gets a +0.3s readability tail
-    assert "1\n00:00:00,000 --> 00:00:01,300\nHello world" in srt
+    # cue gets a +0.35s readability tail
+    assert "1\n00:00:00,000 --> 00:00:01,350\nHello world" in srt
 
 
 def test_wraps_on_max_chars():
@@ -76,3 +76,20 @@ def test_alignment_mode_builds_absolute_cues(tmp_path):
     srt = (run / "captions.srt").read_text()
     assert "00:00:02,000 -->" in srt      # scene words offset by intro (2.0s)
     assert "Open the settings." in srt
+
+
+def test_soft_break_never_ends_on_connective():
+    toks = "Every post on your site gets a title and a description in results".split()
+    words = [{"word": t, "start": i * 0.3, "end": i * 0.3 + 0.3} for i, t in enumerate(toks)]
+    srt = words_to_srt(words, max_chars=44)
+    for block in srt.strip().split("\n\n"):
+        last = block.splitlines()[2].split()[-1].lower().strip(".,!?")
+        assert last not in {"and", "a", "the", "of", "in", "on", "to"}, block
+
+
+def test_orphan_fragment_merges_backward():
+    toks = "The meta description works exactly the same way.".split()
+    words = [{"word": t, "start": i * 0.3, "end": i * 0.3 + 0.3} for i, t in enumerate(toks)]
+    srt = words_to_srt(words, max_chars=40)
+    blocks = srt.strip().split("\n\n")
+    assert not any(b.splitlines()[2].strip() == "way." for b in blocks)

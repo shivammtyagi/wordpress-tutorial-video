@@ -10,8 +10,11 @@ words interpolate between matched neighbors.
 Fallback (v1 behavior): when alignments or the timeline are missing, read
 verify/transcript.json (whole-video transcription) directly.
 
-Cues are bounded by max characters and max duration, get a +0.3s readability
-tail, and are de-overlapped by 0.05s (floating-point overlap protection).
+Cue segmentation is phrase-aware: cues break at sentence ends and (when long
+enough) at commas; a soft length break backtracks so no cue ends on a dangling
+connective ("...and a" / "...of the"); orphan fragments shorter than 14 chars
+merge into the previous cue. Cues get a +0.35s readability tail and are
+de-overlapped by 0.06s.
 """
 import argparse
 import difflib
@@ -84,42 +87,68 @@ def _alignment_words(run_dir):
     return all_words
 
 
-def words_to_srt(words, max_chars=42, max_secs=3.5):
-    """words: list of {word, start, end}. Returns SRT text."""
-    cues = []
-    cur = []
-    cur_len = 0
+CONNECTIVES = {"a", "an", "the", "and", "or", "of", "in", "on", "to", "with",
+               "your", "for", "is", "are", "it", "at", "by", "into", "how",
+               "so", "you", "we", "they", "i", "i'm", "i'll"}
+
+MERGE_ORPHAN_CHARS = 14   # trailing fragments shorter than this merge backward
+MERGE_MAX_CHARS = 60      # ...if the merged cue stays under this
+
+
+def words_to_srt(words, max_chars=46, max_secs=6.0):
+    """words: list of {word, start, end}. Returns phrase-aware SRT text."""
+    def text_of(chunk):
+        return " ".join(w["word"].strip() for w in chunk)
+
+    cues, cur = [], []
     for w in words:
         token = w["word"].strip()
         if not token:
             continue
-        add = len(token) + (1 if cur else 0)
-        too_long = cur and (cur_len + add > max_chars)
-        too_slow = cur and (w["end"] - cur[0]["start"] > max_secs)
-        if too_long or too_slow:
-            cues.append(cur)
-            cur, cur_len = [], 0
-            add = len(token)
+        if cur and (len(text_of(cur + [w])) > max_chars
+                    or w["end"] - cur[0]["start"] > max_secs):
+            # soft break: never end a cue on a dangling connective
+            cut = len(cur)
+            while cut > 1 and cur[cut - 1]["word"].strip().lower().strip(".,!?") in CONNECTIVES:
+                cut -= 1
+            cues.append(cur[:cut])
+            cur = cur[cut:]
         cur.append(w)
-        cur_len += add
+        if token[-1] in ".!?":
+            cues.append(cur)
+            cur = []
+        elif token.endswith(",") and len(text_of(cur)) >= 26:
+            cues.append(cur)
+            cur = []
     if cur:
         cues.append(cur)
 
+    # merge sentence-final orphan fragments ("way.", "results.") into the
+    # previous cue; soft-break chunks are left alone.
+    merged = []
+    for chunk in cues:
+        if (merged and chunk[-1]["word"].strip()[-1:] in ".!?"
+                and len(text_of(chunk)) < MERGE_ORPHAN_CHARS
+                and chunk[0]["start"] - merged[-1][-1]["end"] < 0.5
+                and len(text_of(merged[-1])) + len(text_of(chunk)) + 1 <= MERGE_MAX_CHARS):
+            merged[-1] = merged[-1] + chunk
+        else:
+            merged.append(chunk)
+
     out = []
-    for i, cue in enumerate(cues, 1):
+    for i, cue in enumerate(merged, 1):
         start = cue[0]["start"]
-        end = cue[-1]["end"] + 0.3  # readability tail
-        if i < len(cues):
-            end = min(end, cues[i][0]["start"] - 0.05)  # de-overlap
-        text = " ".join(w["word"].strip() for w in cue)
-        out.append(f"{i}\n{_ts(start)} --> {_ts(max(end, start + 0.2))}\n{text}")
+        end = cue[-1]["end"] + 0.35  # readability tail
+        if i < len(merged):
+            end = min(end, merged[i][0]["start"] - 0.06)  # de-overlap
+        out.append(f"{i}\n{_ts(start)} --> {_ts(max(end, start + 0.2))}\n{text_of(cue)}")
     return "\n\n".join(out) + ("\n" if out else "")
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", required=True)
-    ap.add_argument("--max-chars", type=int, default=42)
+    ap.add_argument("--max-chars", type=int, default=46)
     args = ap.parse_args()
 
     words = _alignment_words(args.run_dir)
