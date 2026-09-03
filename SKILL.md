@@ -57,8 +57,9 @@ Create the run directory `runs/<slug>-<hash>/` and write `config.json`:
   "tts_exaggeration": 0.4,                   // chatterbox: emotion intensity 0..1
   "tts_cfg": 0.35,                           // chatterbox: generation-guidance weight
   "tts_gap_s": 0.30,                         // chatterbox: pause between sentences
-  "tts_target_wpm": 185,                     // pace ceiling; regenerate then atempo-stretch to hit it
-  "tts_max_attempts": 2,                     // regenerations before the pitch-safe stretch
+  "tts_sentence_wpm": 172,                   // per-SENTENCE pace ceiling (redraw fast sentences, then stretch)
+  "tts_target_wpm": 185,                     // whole-scene backstop ceiling
+  "tts_max_attempts": 3,                     // redraws per fast sentence before its stretch
   "tts_voice_prompt": null,                  // optional reference WAV to clone (get consent!)
   "voice": "af_heart",                       // kokoro fallback voice
   "speed": 1.0,                              // kokoro speaking speed (1.0 sounds most natural)
