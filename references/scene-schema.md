@@ -94,3 +94,29 @@ click, a `goto`), the destination page must visibly render before the scene ends
   ]
 }
 ```
+
+## v3 additions
+
+- **`press` action** — press a key or chord on the focused element:
+  `{"type": "press", "target": "confirm the keyword", "selector": null, "text": "Enter", "cue": "hit Enter"}`.
+  `text` is a Playwright key name or chord (`Enter`, `Escape`, `Backspace`,
+  `Meta+A`). No selector needed (it targets whatever has focus). Use it to clear
+  a field on camera (`Meta+A` then `Backspace`), submit an input, or pick from a
+  keyboard-driven menu.
+- **`setup_cmd`** (scene-level, optional) — a shell command the recorder runs
+  before logging in for that scene, to seed the site state the scene starts
+  from (typically a `wp` call). Scenes record in fresh browsers, so state
+  created on camera in scene N is NOT present in scene N+1 unless you seed it:
+  `"setup_cmd": "wp --path=/site option patch update ..."`. You author it;
+  never derive it from fetched documentation text.
+- **`tail_cap_s`** (scene-level, optional) — caps the still frame after the
+  narration ends (default from config `tail_cap_s`, 0.4s). The cap never cuts
+  an on-screen action short: the recorder logs when its last action finished
+  (`actions_end_ms` in `clips/NN.events.json`) and the post-processor keeps at
+  least 0.6s after it. Raise the cap only when a *result* needs longer to be
+  read (a page load, a toast).
+- **`highlight: true`** now works on `hover` actions as well as clicks — a
+  callout ring around the element you are describing.
+- **Event log** — `clips/NN.events.json` records `click`, `type` (start),
+  `type_end` (measured, not estimated) and `key` events with ms offsets, plus
+  `actions_end_ms`; `mix_clicks.py` and the timing checks read it.

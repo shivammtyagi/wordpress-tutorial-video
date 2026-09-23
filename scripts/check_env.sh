@@ -85,6 +85,15 @@ else
 fi
 printf "%-14s %-14s %s\n" "playwright" "${pw_ver:0:14}" "$pw_status"
 
+if [ "${1:-}" = "--deep" ] && [ -x "$VENV_CBX/bin/python" ]; then
+  echo ""
+  echo "Checking Chatterbox engine imports (no model download)..."
+  if "$VENV_CBX/bin/python" -c "from chatterbox.tts import ChatterboxTTS; import perth; assert perth.PerthImplicitWatermarker" 2>/dev/null; then
+    echo "  chatterbox: import ok"
+  else
+    echo "  chatterbox: IMPORT FAILED (check setuptools<81 pin)"; missing=$((missing+1))
+  fi
+fi
 if [ "${1:-}" = "--deep" ] && [ -x "$VENV/bin/python" ]; then
   echo ""
   echo "Running TTS + alignment self-test (~30s first run: model downloads)..."

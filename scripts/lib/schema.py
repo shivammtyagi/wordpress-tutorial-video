@@ -9,7 +9,7 @@ Two phases share one schema:
 an empty list means valid.
 """
 
-ACTION_TYPES = {"click", "type", "scroll", "hover", "wait", "goto"}
+ACTION_TYPES = {"click", "type", "scroll", "hover", "wait", "goto", "press"}
 
 
 def validate_script(obj, discovered=False):
@@ -72,10 +72,12 @@ def validate_script(obj, discovered=False):
                     errors.append(f"{aloc}.phase: must be 'setup' or 'recorded'")
                 if "cue" in ac and (not isinstance(ac["cue"], str) or not ac["cue"].strip()):
                     errors.append(f"{aloc}.cue: must be a non-empty string when present")
-                if (discovered and ac.get("type") not in ("goto", "wait")
+                if (discovered and ac.get("type") not in ("goto", "wait", "press")
                         and not ac.get("selector")):
                     errors.append(f"{aloc}.selector: must be resolved (non-null) after discovery")
 
+        if "setup_cmd" in sc and (not isinstance(sc["setup_cmd"], str) or not sc["setup_cmd"].strip()):
+            errors.append(f"{loc}.setup_cmd: must be a non-empty string when present")
         if discovered and not sc.get("focus_selector"):
             errors.append(f"{loc}.focus_selector: must be resolved (non-null) after discovery")
 

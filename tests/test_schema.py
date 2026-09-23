@@ -99,3 +99,22 @@ def test_goto_and_wait_need_no_selector_after_discovery():
          "highlight": True},
     ]
     assert schema.validate_script(_valid_script(sc), discovered=True) == []
+
+
+def test_press_action_needs_no_selector_after_discovery():
+    doc = copy.deepcopy(VALID)
+    for sc in doc["scenes"]:
+        for a in sc["actions"]:
+            if a["type"] not in ("goto", "wait") and not a.get("selector"):
+                a["selector"] = "#x"
+        sc["focus_selector"] = "#x"
+        sc["setup_cmd"] = "echo seed"
+    doc["scenes"][0]["actions"].append(
+        {"type": "press", "target": "confirm the keyword", "selector": None, "text": "Enter"})
+    assert schema.validate_script(doc, discovered=True) == []
+
+
+def test_setup_cmd_must_be_nonempty_string():
+    doc = copy.deepcopy(VALID)
+    doc["scenes"][0]["setup_cmd"] = "   "
+    assert any("setup_cmd" in e for e in schema.validate_script(doc, discovered=False))

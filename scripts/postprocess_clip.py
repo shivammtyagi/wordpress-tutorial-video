@@ -38,6 +38,19 @@ def probe_duration(path):
     return float(out.strip())
 
 
+def resolve_target(clip_len, narration, tail_pad=0.0, tail_cap=None, actions_end=None):
+    """Final clip length: never shorter than the narration, capped by the still
+    tail after it — but never cutting an on-screen action short (the recorder
+    logs when its last action finished; that moment + 0.6s is a hard floor)."""
+    target = max(clip_len, narration) + max(0.0, tail_pad)
+    if tail_cap is not None and narration > 0:
+        cap_end = narration + max(float(tail_cap), 0.15)
+        if actions_end is not None:
+            cap_end = max(cap_end, actions_end + 0.6)
+        target = min(max(target, narration + 0.15), cap_end)
+    return round(target, 3)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", required=True)
@@ -79,7 +92,6 @@ def main():
     durations = json.load(open(os.path.join(args.run_dir, "audio", "durations.json")))
     narration = float(durations.get(sid, 0))
     clip_len = probe_duration(raw)
-    target = max(clip_len, narration) + max(0.0, args.tail_pad)
     # tail cap priority: CLI flag > per-scene script field > config default.
     tail_cap = args.tail_cap
     if tail_cap is None:
@@ -92,8 +104,12 @@ def main():
             tail_cap = scene.get("tail_cap_s")
     if tail_cap is None:
         tail_cap = cfg.get("tail_cap_s")
-    if tail_cap is not None and narration > 0:
-        target = min(max(target, narration + 0.15), narration + max(float(tail_cap), 0.15))
+    actions_end = None
+    ev_path = os.path.join(args.run_dir, "clips", f"{sid}.events.json")
+    if os.path.exists(ev_path):
+        ms = json.load(open(ev_path)).get("actions_end_ms")
+        actions_end = ms / 1000.0 if ms is not None else None
+    target = resolve_target(clip_len, narration, args.tail_pad, tail_cap, actions_end)
 
     dw, dh = (int(x) for x in resolution.split("x"))
     focus = json.load(open(focus_path)) if os.path.exists(focus_path) else {}

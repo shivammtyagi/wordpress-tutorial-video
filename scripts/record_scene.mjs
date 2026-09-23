@@ -12,11 +12,12 @@
 // config.json (wp_user_env / wp_pass_env), never hard-coded.
 // When --base-url points at a file:// fixture, login and WP checks are skipped.
 //
-// Exit codes: 2 usage · 3 login/session · 4 empty recording · 5 destructive guard · 6 PHP error
+// Exit codes: 2 usage · 3 login/session · 4 empty recording · 5 destructive guard · 6 PHP error · 7 browser died mid-capture (scene too long / low memory)
 import { chromium } from 'playwright';
 import { readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execSync } from 'node:child_process';
 
 // Genuine macOS arrow cursor (extracted from NSCursor.arrow at 5x), logical
 // size 28x40 with hotspot (5,5) — displayed at logical size so the capture's
@@ -135,6 +136,22 @@ async function pressEffect(page, box) {
   }, [x, y, accent]).catch(() => {});
 }
 
+// Accent-colored callout ring (with page dim) around an element, drawn via the
+// screencast overlay so it sits in the recording but never in the DOM.
+async function showHighlight(page, loc) {
+  const box = await loc.boundingBox().catch(() => null);
+  if (!box) return;
+  // overlay lives inside the zoomed document → divide by scale
+  const [hx, hy, hw, hh] = [box.x / scale, box.y / scale, box.width / scale, box.height / scale];
+  await page.screencast.showOverlay(
+    `<div style="position:fixed;left:${hx - 6}px;top:${hy - 6}px;` +
+    `width:${hw + 12}px;height:${hh + 12}px;` +
+    `border:3px solid ${accent};border-radius:10px;` +
+    `box-shadow:0 0 0 9999px rgba(0,0,0,.12);pointer-events:none;"></div>`,
+    { duration: 1200 });
+  await sleep(250);
+}
+
 // Scroll an element toward the viewport center only when it is not already
 // comfortably in view — avoids gratuitous page motion between actions.
 async function ensureCentered(page, loc) {
@@ -240,21 +257,7 @@ async function runAction(page, a) {
       const loc = page.locator(sel).first();
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
       await ensureCentered(page, loc);
-      if (a.highlight) {
-        const box = await loc.boundingBox();
-        if (box) {
-          // overlay lives inside the zoomed document → divide by scale
-          const [hx, hy, hw, hh] = [box.x / scale, box.y / scale,
-            box.width / scale, box.height / scale];
-          await page.screencast.showOverlay(
-            `<div style="position:fixed;left:${hx - 6}px;top:${hy - 6}px;` +
-            `width:${hw + 12}px;height:${hh + 12}px;` +
-            `border:3px solid ${accent};border-radius:10px;` +
-            `box-shadow:0 0 0 9999px rgba(0,0,0,.12);pointer-events:none;"></div>`,
-            { duration: 1200 });
-          await sleep(250);
-        }
-      }
+      if (a.highlight) await showHighlight(page, loc);
       // Coordinate input, never loc.click(): Playwright's actionability loop
       // re-fires its own instant scrollIntoView on every retry, which fights
       // the cinematic smooth scroll and visibly bounces the page on widgets
@@ -305,18 +308,28 @@ async function runAction(page, a) {
       // keyboard.type targets the focused element (our click just focused it)
       // and performs no element re-checks that could scroll the page mid-word.
       await page.keyboard.type(a.text || '', { delay: 60 });
+      logEvent('type_end');
       break;
     }
     case 'hover': {
       const loc = page.locator(sel).first();
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
       await ensureCentered(page, loc);
+      if (a.highlight) await showHighlight(page, loc);
       const box = await glideCursorTo(page, loc);
       if (box) {
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       } else {
         await loc.hover({ force: true, timeout: 5000 });
       }
+      break;
+    }
+    case 'press': {
+      // keyboard key or chord, e.g. "Enter", "Escape", "Meta+A", "Backspace"
+      const key = a.text || 'Enter';
+      await page.keyboard.press(key);
+      logEvent('key', { key });
+      await sleep(150);
       break;
     }
     case 'scroll': {
@@ -411,6 +424,27 @@ if ((cfg.redact_selectors || []).length || (cfg.redact_patterns || []).length) {
   })()`);
 }
 const page = await context.newPage();
+// Surface renderer crashes and unexpected closes explicitly — otherwise the
+// only symptom is a late "Target page ... has been closed" from screencast.stop.
+page.on('crash', () => console.error('record_scene: PAGE CRASHED (renderer died) — heavy page under capture?'));
+page.on('close', () => { if (capturing) console.error(`record_scene: page closed during capture at +${((Date.now() - captureT0) / 1000).toFixed(1)}s`); });
+browser.on('disconnected', () => {
+  if (!capturing) return;
+  console.error(`record_scene: BROWSER PROCESS DIED at +${((Date.now() - captureT0) / 1000).toFixed(1)}s of capture. ` +
+    'Long captures exhaust memory (screencast frames accumulate until stop). ' +
+    'Split this scene so each capture stays under ~20s, and free memory (close other browsers).');
+  process.exit(7);
+});
+page.on('pageerror', (e) => console.error(`record_scene: page error: ${String(e.message || e).slice(0, 200)}`));
+
+// Optional per-scene state hook: a shell command that seeds the site state
+// this scene starts from (e.g. a wp-cli call that pre-adds what an earlier
+// scene created on camera). Runs before login, off camera. The script author
+// writes it — never derive it from fetched documentation text.
+if (scene.setup_cmd) {
+  console.log(`record_scene: setup_cmd → ${scene.setup_cmd}`);
+  execSync(scene.setup_cmd, { stdio: 'inherit', shell: '/bin/zsh' });
+}
 
 await login(page);
 
@@ -449,6 +483,9 @@ for (const a of recordedActions) {
   }
   await runAction(page, a);
 }
+// when the last on-camera action finished — the post-processor never trims
+// the clip before this point, whatever the tail cap says.
+const actionsEndMs = Date.now() - captureT0;
 
 // Record the focus element's bounding box (CSS layout px) + capture scale for
 // the post-processor's zoom (it multiplies by `scale` for master-pixel coords).
@@ -476,8 +513,9 @@ if (narrationMs && elapsed < narrationMs) {
 }
 
 await page.screencast.stop();
+capturing = false;
 writeFileSync(join(runDir, 'clips', `${sceneId}.events.json`),
-  JSON.stringify({ events }, null, 2));
+  JSON.stringify({ events, actions_end_ms: actionsEndMs }, null, 2));
 await browser.close();
 
 const size = statSync(outPath).size;
