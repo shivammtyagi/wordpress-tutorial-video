@@ -38,15 +38,43 @@ def probe_duration(path):
     return float(out.strip())
 
 
+# Seconds to keep after the last on-camera action so its result is visible.
+ACTION_SETTLE_S = 1.0
+
+
+def _action_end_s(events_path):
+    """When (seconds into the raw clip) the last recorded action finishes.
+
+    Reads clips/NN.events.json from record_scene.mjs. The recorder logs a
+    `type_end` event when typing really finishes (and `actions_end_ms` for the
+    whole action list); for older logs without those, a `type` event is
+    estimated at chars x delay ms (an underestimate — real typing is slower).
+    Clicks and keypresses are instantaneous. Returns None when there is no
+    event log (fixtures).
+    """
+    if not os.path.exists(events_path):
+        return None
+    doc = json.load(open(events_path))
+    ends = []
+    for ev in doc.get("events", []):
+        t = float(ev.get("t", 0))
+        if ev.get("kind") == "type":
+            t += float(ev.get("chars", 0)) * float(ev.get("delay", 0))
+        ends.append(t)
+    if doc.get("actions_end_ms") is not None:
+        ends.append(float(doc["actions_end_ms"]))
+    return max(ends) / 1000.0 if ends else None
+
+
 def resolve_target(clip_len, narration, tail_pad=0.0, tail_cap=None, actions_end=None):
     """Final clip length: never shorter than the narration, capped by the still
-    tail after it — but never cutting an on-screen action short (the recorder
-    logs when its last action finished; that moment + 0.6s is a hard floor)."""
+    tail after it — but never cutting an on-screen action short: the last
+    action's end + ACTION_SETTLE_S is a hard floor (bounded by the raw clip)."""
     target = max(clip_len, narration) + max(0.0, tail_pad)
     if tail_cap is not None and narration > 0:
         cap_end = narration + max(float(tail_cap), 0.15)
         if actions_end is not None:
-            cap_end = max(cap_end, actions_end + 0.6)
+            cap_end = max(cap_end, min(clip_len, actions_end + ACTION_SETTLE_S))
         target = min(max(target, narration + 0.15), cap_end)
     return round(target, 3)
 
@@ -75,9 +103,11 @@ def main():
         raise SystemExit(f"postprocess: missing {raw}")
 
     focus_path = os.path.join(args.run_dir, "clips", f"{sid}.focus.json")
+    events_path = os.path.join(args.run_dir, "clips", f"{sid}.events.json")
     inputs = [raw, os.path.join(args.run_dir, "audio", "durations.json")]
-    if os.path.exists(focus_path):
-        inputs.append(focus_path)
+    for extra in (focus_path, events_path):
+        if os.path.exists(extra):
+            inputs.append(extra)
     if rd.is_done(args.run_dir, f"postprocess:{sid}", inputs) and not args.force:
         print(f"postprocess: scene {sid} up to date")
         return
@@ -104,12 +134,8 @@ def main():
             tail_cap = scene.get("tail_cap_s")
     if tail_cap is None:
         tail_cap = cfg.get("tail_cap_s")
-    actions_end = None
-    ev_path = os.path.join(args.run_dir, "clips", f"{sid}.events.json")
-    if os.path.exists(ev_path):
-        ms = json.load(open(ev_path)).get("actions_end_ms")
-        actions_end = ms / 1000.0 if ms is not None else None
-    target = resolve_target(clip_len, narration, args.tail_pad, tail_cap, actions_end)
+    target = resolve_target(clip_len, narration, args.tail_pad, tail_cap,
+                            _action_end_s(events_path))
 
     dw, dh = (int(x) for x in resolution.split("x"))
     focus = json.load(open(focus_path)) if os.path.exists(focus_path) else {}

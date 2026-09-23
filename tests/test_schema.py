@@ -114,6 +114,12 @@ def test_press_action_needs_no_selector_after_discovery():
     assert schema.validate_script(doc, discovered=True) == []
 
 
+def test_press_requires_text():
+    doc = copy.deepcopy(VALID)
+    doc["scenes"][0]["actions"].append({"type": "press", "target": "select all", "selector": None})
+    assert any("text" in e for e in schema.validate_script(doc, discovered=False))
+
+
 def test_setup_cmd_must_be_nonempty_string():
     doc = copy.deepcopy(VALID)
     doc["scenes"][0]["setup_cmd"] = "   "

@@ -10,6 +10,9 @@ an empty list means valid.
 """
 
 ACTION_TYPES = {"click", "type", "scroll", "hover", "wait", "goto", "press"}
+# Actions that never need a selector: `goto`/`wait` have no element, and
+# `press` sends a key or chord to whatever element already has focus.
+NO_SELECTOR = {"goto", "wait", "press"}
 
 
 def validate_script(obj, discovered=False):
@@ -65,14 +68,14 @@ def validate_script(obj, discovered=False):
                     errors.append(f"{aloc}.type: must be one of {sorted(ACTION_TYPES)}")
                 if not ac.get("target"):
                     errors.append(f"{aloc}.target: required human-language description")
-                if ac.get("type") == "type" and not ac.get("text"):
-                    errors.append(f"{aloc}.text: required when type=='type'")
+                if ac.get("type") in ("type", "press") and not ac.get("text"):
+                    errors.append(f"{aloc}.text: required when type=='{ac.get('type')}'")
                 phase = ac.get("phase", "recorded")
                 if phase not in ("setup", "recorded"):
                     errors.append(f"{aloc}.phase: must be 'setup' or 'recorded'")
                 if "cue" in ac and (not isinstance(ac["cue"], str) or not ac["cue"].strip()):
                     errors.append(f"{aloc}.cue: must be a non-empty string when present")
-                if (discovered and ac.get("type") not in ("goto", "wait", "press")
+                if (discovered and ac.get("type") not in NO_SELECTOR
                         and not ac.get("selector")):
                     errors.append(f"{aloc}.selector: must be resolved (non-null) after discovery")
 

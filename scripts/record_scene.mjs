@@ -325,11 +325,12 @@ async function runAction(page, a) {
       break;
     }
     case 'press': {
-      // keyboard key or chord, e.g. "Enter", "Escape", "Meta+A", "Backspace"
-      const key = a.text || 'Enter';
-      await page.keyboard.press(key);
-      logEvent('key', { key });
-      await sleep(150);
+      // A key or chord ("Enter", "Meta+A", "Backspace", "Escape") sent to the
+      // element that already has focus — for edits a mouse can't express, such
+      // as clearing a rich-text field. Focus it first with a click/type action.
+      logEvent('press', { key: a.text });
+      await page.keyboard.press(a.text);
+      await sleep(250);
       break;
     }
     case 'scroll': {

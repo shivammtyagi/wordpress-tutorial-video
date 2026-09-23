@@ -162,7 +162,12 @@ def main():
         durations[sid] = round(secs, 3)
         meta[sid] = {"hash": key, "ref_text": ref_text, "tts_text": tts_text}
         words = len(tts_text.split())
-        print(f"tts: scene {sid} -> {out} ({secs:.2f}s, {words / secs * 60:.0f} wpm)")
+        final_wpm = words / secs * 60
+        print(f"tts: scene {sid} -> {out} ({secs:.2f}s, {final_wpm:.0f} wpm)")
+        if final_wpm > target_wpm * 1.15:
+            print(f"tts: WARNING scene {sid} is still {final_wpm:.0f} wpm after stretching "
+                  f"(target {target_wpm:.0f}) — the take draws too fast to rescue; "
+                  "rewrite the line (shorter clauses, or a question + answer) and regenerate.")
 
     rd.write_json(dur_path, durations)
     rd.write_json(meta_path, meta)

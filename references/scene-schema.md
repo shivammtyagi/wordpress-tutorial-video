@@ -38,10 +38,10 @@ Recording reads **only** `script.discovered.json`.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `type` | enum | `click`, `type`, `scroll`, `hover`, `wait`, `goto`. |
+| `type` | enum | `click`, `type`, `scroll`, `hover`, `wait`, `goto`, `press`. |
 | `target` | string | **Human-language** description ("Sitemaps submenu"). Claude writes this without DOM knowledge. |
 | `selector` | string\|null | Verified Playwright selector. Resolved during discovery. |
-| `text` | string | Required when `type == "type"` (text to type) or `wait` (ms). |
+| `text` | string | Required when `type == "type"` (text to type), `press` (key/chord) or `wait` (ms). |
 | `highlight` | bool | When true, draw a callout box around the element before clicking. |
 | `phase` | enum | `"setup"` (runs before recording starts: login already done, navigation, cleanup) or `"recorded"` (default; runs on camera). The delivered clip never shows setup actions. |
 | `cue` | string | Optional word/phrase from this scene's `narration`. The recorder fires the action when that word is spoken (per-scene word offsets from the audio gate). Omit for sequential pacing. |
@@ -99,8 +99,8 @@ click, a `goto`), the destination page must visibly render before the scene ends
 
 - **`press` action** — press a key or chord on the focused element:
   `{"type": "press", "target": "confirm the keyword", "selector": null, "text": "Enter", "cue": "hit Enter"}`.
-  `text` is a Playwright key name or chord (`Enter`, `Escape`, `Backspace`,
-  `Meta+A`). No selector needed (it targets whatever has focus). Use it to clear
+  `text` is required: a Playwright key name or chord (`Enter`, `Escape`,
+  `Backspace`, `Meta+A`). No selector needed (it targets whatever has focus). Use it to clear
   a field on camera (`Meta+A` then `Backspace`), submit an input, or pick from a
   keyboard-driven menu.
 - **`setup_cmd`** (scene-level, optional) — a shell command the recorder runs
