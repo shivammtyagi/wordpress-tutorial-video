@@ -60,6 +60,7 @@ Create the run directory `runs/<slug>-<hash>/` and write `config.json`:
   "tts_target_wpm": 185,                     // pace ceiling; regenerate then atempo-stretch to hit it
   "tts_max_attempts": 2,                     // regenerations before the pitch-safe stretch
   "tts_voice_prompt": null,                  // optional reference WAV to clone (get consent!)
+  "tts_spoken": {},                          // chatterbox respellings for coinages, e.g. {"TruSEO": "True SEO"} (captions keep the spelling)
   "voice": "af_heart",                       // kokoro fallback voice
   "speed": 1.0,                              // kokoro speaking speed (1.0 sounds most natural)
   "lexicon": {},                             // kokoro pronunciation overrides (term → IPA)

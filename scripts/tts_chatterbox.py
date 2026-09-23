@@ -9,6 +9,9 @@ intonation, emphasis), MIT-licensed, runs on Apple Silicon (MPS).
 Differences from the Kokoro path:
   * No IPA lexicon — Chatterbox reads plain English; narration text is
     normalized with normalize.for_ref() on both the TTS and reference sides.
+    Brand coinages it mangles ("TruSEO" → "Trucio") get a plain respelling via
+    config "tts_spoken": {"TruSEO": "True SEO"} — applied to the TTS text AND
+    the gate's reference text, while captions keep the script's spelling.
   * Synthesis is per sentence, joined with a fixed inter-sentence gap, which
     keeps long scenes stable and gives deterministic pause lengths.
   * Pace/expressiveness knobs come from config.json:
@@ -79,6 +82,7 @@ def main():
     target_wpm = float(cfg.get("tts_target_wpm", 185))
     max_attempts = int(cfg.get("tts_max_attempts", 2))
     voice_prompt = cfg.get("tts_voice_prompt") or None
+    spoken = cfg.get("tts_spoken") or {}
 
     audio_dir = os.path.join(args.run_dir, "audio")
     cache_dir = os.path.join(audio_dir, "cache")
@@ -112,6 +116,8 @@ def main():
         if args.scene_id and sid != args.scene_id:
             continue
         tts_text = norm.for_ref(scene["narration"], {})
+        for term, say in spoken.items():
+            tts_text = re.sub(rf"\b{re.escape(term)}\b", say, tts_text)
         ref_text = tts_text
         key = hashlib.sha256(
             f"chatterbox|{voice_prompt}|{exaggeration}|{cfg_weight}|{gap_s}|{tts_text}"
