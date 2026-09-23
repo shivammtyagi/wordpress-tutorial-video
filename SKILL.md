@@ -238,6 +238,10 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
   Use `capture_scale: 1` (the default) for any flow that opens dropdowns.
   (True `deviceScaleFactor` capture doesn't help: Playwright's screencast
   records CSS pixels and letterboxes larger sizes — verified empirically.)
+- **Recording dies with `screencast.stop: Target page, context or browser has
+  been closed`** → the tab crashed under the 4K CSS-zoom capture on a heavy page
+  (block editor with large plugin panels). Systematic, not flaky: set
+  `capture_scale: 1` for that run. Lighter admin/settings screens tolerate 2.
 - **The page "randomly scrolls" around clicks** → never use Playwright
   `loc.click()` in the recorder: its actionability retries re-fire
   scrollIntoView and fight the cinematic scroll. The recorder clicks by mouse
