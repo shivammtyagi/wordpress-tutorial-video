@@ -61,15 +61,20 @@ Create the run directory `runs/<slug>-<hash>/` and write `config.json`:
   "tts_max_attempts": 2,                     // regenerations before the pitch-safe stretch
   "tts_voice_prompt": null,                  // optional reference WAV to clone (get consent!)
   "tts_spoken": {},                          // chatterbox respellings for coinages, e.g. {"TruSEO": "True SEO"} (captions keep the spelling)
-  "voice": "af_heart",                       // kokoro fallback voice
-  "speed": 1.0,                              // kokoro speaking speed (1.0 sounds most natural)
+  "voice": "af_heart",                       // kokoro voice
+  "speed": 1.0,                              // kokoro speaking speed (0.95 with natural pacing; 1.0 otherwise)
+  "tts_sentence_gap_s": 0.65,                // kokoro natural pacing: pause between sentences (omit = off)
+  "tts_paragraph_gap_s": 1.0,                // kokoro natural pacing: pause at a "\n" in the narration
+  "tts_min_words": 5,                        // kokoro natural pacing: merge shorter sentences into a neighbour
+  "tts_lead_s": 0.35, "tts_tail_s": 0.5,     // kokoro natural pacing: room before/after the narration
   "lexicon": {},                             // kokoro pronunciation overrides (term → IPA)
   "asr_model": "small.en",                   // audio-gate WhisperX model ("large-v3-turbo" = max accuracy)
   "accent_color": "#2271b1",                 // highlight rings + click ripples (use the brand color)
   "chapter_cards": false,                    // 2s blurred card per scene (off: MP4 chapters instead)
   "transitions": "intro",                    // intro (one eased dissolve after the title card) | none | fade
   "intro_seconds": 3.0,
-  "outro_seconds": 2.5,
+  "outro_seconds": 2.5,                      // 0 = no end card
+  "deliver_4k": false,                       // true: also compose a 3840x2160 edition (compose.py --deliver-4k)
   "intro_subtitle": "A step-by-step WordPress tutorial",
   "tail_cap_s": 0.4,                         // max still-frame tail after narration (per-scene: tail_cap_s on the scene)
   "dismiss_selectors": [],                   // page elements to remove while recording (promo banners, NPS modals)
@@ -104,6 +109,20 @@ Before creating the run, ask the user:
 - Without: the default card template and WP-admin-blue accents are used; write
   the narration in the generic house style (also in `brand-kit.md`).
 
+## Prepare the environment — before any recording
+
+Never demo on whatever test content happens to exist. Before step 6, create
+purpose-built content the audience will find relatable — for an SEO plugin, a
+genuinely good short article *about SEO* (500–700 words, real headings, an
+internal and an outbound link), published via WP-CLI:
+
+    wp post create content.html --post_title="…" --post_status=publish --porcelain
+
+Point every scene's `goto` at that post, choose a focus keyword that fits it,
+and seed per-scene state with `setup_cmd`. Record the created IDs so the run
+can be cleaned up. Prepared content is part of the deliverable's quality: the
+viewer should see the product working on something they'd actually write.
+
 ## The pipeline
 
 Run steps in order. Each writes to the run directory and records completion in
@@ -118,17 +137,17 @@ with `--force` to redo it.
 | 3 | Write `script.json` | **you** — see below | `scene-schema.md` |
 | 4 | Self-review the script | **you** — clarity, 155–165 wpm pacing, 4–12 scenes | `scene-schema.md` |
 | 5 | Voiceover + durations | `tts_chatterbox.py --run-dir <d>` (.venv-cbx; default) or `tts_kokoro.py` (.venv; fallback) | `voices.md` |
-| 5a | Trim silences + compress pauses | `trim_audio.py --run-dir <d>` (venv) — run BEFORE the gate | `voices.md` |
+| 5a | Trim silences + compress pauses | `trim_audio.py --run-dir <d>` (venv) — run BEFORE the gate. **Skip** in Kokoro natural pacing mode (its pauses are deliberate; edges are pre-trimmed) | `voices.md` |
 | 5b | **Audio gate** — per-scene WER + word offsets | `verify_scenes.py --run-dir <d>` (venv); on failure regenerate that scene's audio (engine script `--force --scene-id NN`), re-trim, and re-run `verify_scenes.py --scene-id NN`, at most `max_fix_iterations` times | `verification.md` |
 | 6 | Discover selectors + plan phases/cues | **you** — explore the live site | `selector-discovery.md` |
 | 7 | Record each scene | `node scripts/record_scene.mjs --run-dir <d> --scene-id NN --base-url <site>` | `recording-tuning.md` |
 | 8 | Post-process each clip | `postprocess_clip.py --run-dir <d> --scene-id NN [--zoom]` | `ffmpeg-recipes.md` |
-| 9 | Compose (timeline, chapters, captions, faststart) | `compose.py --run-dir <d>` | `ffmpeg-recipes.md` |
+| 9 | Compose (timeline, chapters, captions, faststart) | `compose.py --run-dir <d>`; add `--deliver-4k` for the master-resolution edition (needs `capture_scale: 2` + `deliver_4k: true`) | `ffmpeg-recipes.md` |
 | 9b | Mix click sounds at recorded event times | `mix_clicks.py --run-dir <d>` | `ffmpeg-recipes.md` |
 | 10 | Verify visuals | `grab_frames.py --run-dir <d>` + your vision check per scene | `verification.md` |
 | 11 | Auto-fix flagged scenes | **you** — bounded by `max_fix_iterations`; keep before/after frames in `verify/evidence/` | `verification.md` |
 | 12 | Deliver `output/final.mp4` | you | — |
-| 13 | Offer a thumbnail + end card (optional) | **you** — ask; hand the user a Claude Design prompt; integrate their exports with `image_card.py` + recompose | `brand-kit.md` |
+| 13 | Offer a thumbnail + end card (optional) | **you** — ask; hand the user a Claude Design prompt; integrate their exports with `image_card.py` + recompose. No approved end card → `outro_seconds: 0` (see `brand-kit.md` §4b) | `brand-kit.md` |
 
 ### Step 3 — writing the script (your job)
 

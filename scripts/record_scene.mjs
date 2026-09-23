@@ -312,16 +312,19 @@ async function runAction(page, a) {
       break;
     }
     case 'hover': {
+      // Cursor first, ring second: the pointer lands on the element at the cue,
+      // then the highlight frames what it is resting on (a click is the other
+      // way round — the ring marks where the click will land).
       const loc = page.locator(sel).first();
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
       await ensureCentered(page, loc);
-      if (a.highlight) await showHighlight(page, loc);
       const box = await glideCursorTo(page, loc);
       if (box) {
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
       } else {
         await loc.hover({ force: true, timeout: 5000 });
       }
+      if (a.highlight) await showHighlight(page, loc);
       break;
     }
     case 'press': {

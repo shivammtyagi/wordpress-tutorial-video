@@ -185,6 +185,9 @@ def main():
     ap.add_argument("--burn-captions", action="store_true",
                     help="hard-burn captions (needs ffmpeg 'subtitles' filter); "
                          "otherwise captions are muxed as a soft subtitle track")
+    ap.add_argument("--deliver-4k", action="store_true",
+                    help="compose the master-resolution edition from clips/NN.final-4k.mp4 "
+                         "(cards rendered at master size) -> output/final-4k.mp4")
     ap.add_argument("--force", action="store_true")
     args = ap.parse_args()
     _require_ffmpeg()
@@ -192,6 +195,11 @@ def main():
     cfg_path = os.path.join(args.run_dir, "config.json")
     cfg = json.load(open(cfg_path)) if os.path.exists(cfg_path) else {}
     resolution = cfg.get("resolution", "1920x1080")
+    if args.deliver_4k:
+        scale = int(cfg.get("capture_scale", 2))
+        w, h = (int(x) for x in resolution.split("x"))
+        resolution = f"{w * scale}x{h * scale}"
+    clip_suffix = ".final-4k.mp4" if args.deliver_4k else ".final.mp4"
     fps = int(cfg.get("fps", 30))
     fade = cfg.get("transitions") == "fade"
     intro_fade = cfg.get("transitions") == "intro"
@@ -228,7 +236,7 @@ def main():
     scene_clips = []
     for scene in script["scenes"]:
         sid = scene["id"]
-        clip = os.path.join(clips_dir, f"{sid}.final.mp4")
+        clip = os.path.join(clips_dir, f"{sid}{clip_suffix}")
         wav = os.path.join(audio_dir, f"{sid}.wav")
         if not os.path.exists(clip):
             raise SystemExit(f"compose: missing {clip}")
@@ -237,10 +245,11 @@ def main():
         _mux_scene(clip, wav, seg, fps)
         segments.append(("scene", sid, scene.get("intent", sid), seg))
 
-    if not args.no_intro:
+    outro_secs = float(cfg.get("outro_seconds", 2.0))
+    if not args.no_intro and cfg.get("outro", True) and outro_secs > 0:
         outro = os.path.join(work, "outro.mp4")
         _card("Thanks for watching", outro, resolution, fps,
-              seconds=float(cfg.get("outro_seconds", 2.0)),
+              seconds=outro_secs,
               subtitle=cfg.get("outro_subtitle", ""),
               template=_tmpl("card_outro.html"))
         segments.append(("outro", None, None, outro))
@@ -283,7 +292,7 @@ def main():
     chapters = os.path.join(work, "chapters.ffmeta")
     _write_chapters(chapters, timeline, title)
 
-    final = os.path.join(out_dir, "final.mp4")
+    final = os.path.join(out_dir, "final-4k.mp4" if args.deliver_4k else "final.mp4")
     captions = os.path.join(args.run_dir, "captions.srt")
     have_captions = (not args.no_captions and os.path.exists(captions)
                      and os.path.getsize(captions) > 0)

@@ -1,5 +1,10 @@
 # Voices & narration audio
 
+Engine choice is the user's call per channel: Kokoro (deterministic, clean,
+natural-pacing mode below) or Chatterbox (expressive prosody, stochastic).
+AIOSEO production videos use **Kokoro `af_heart` in natural pacing mode**
+(chosen 2026-09-24 for its even flow and controllable pauses).
+
 ## Default: Kokoro-82M
 
 [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) is the default TTS:
@@ -37,6 +42,28 @@ for a distinctive narrator.
 - There is **no SSML/pause tag**. For explicit pauses, split the narration into
   separate lines/scenes; the pipeline joins per-line audio with silence gaps
   deterministically.
+
+### Natural pacing mode (deliberate pauses)
+
+Kokoro articulates at ~200 wpm and pads sentences with almost no air, which
+reads as rushed. Set these in `config.json` and `tts_kokoro.py` switches to
+per-sentence synthesis joined with explicit silences:
+
+```jsonc
+"tts_sentence_gap_s": 0.65,   // pause between sentences
+"tts_paragraph_gap_s": 1.0,   // pause at a "\n" in the narration (new thought)
+"tts_min_words": 5,           // shorter sentences merge into a neighbour
+"tts_lead_s": 0.35,           // room before the first word
+"tts_tail_s": 0.5             // room after the last word
+```
+
+Write the narration with `\n` where the speaker would take a breath before a
+new idea ("Let's open the Basics tab.\nThe checks are sorted…"). Captions and
+the WER gate treat the newline as whitespace. With pauses included, delivery
+lands ~150–165 wpm at `speed` 0.95 — an unhurried tutorial pace. **Skip
+`trim_audio.py`** (or run it with `--max-pause 5`) on this output: its pause
+compression would undo the deliberate gaps. Pair it with a longer still tail
+per scene (`tail_cap_s` ~1.2) so the picture breathes too.
 
 ### Pronunciation control (the audio-gate insurance)
 

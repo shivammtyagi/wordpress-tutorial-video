@@ -116,7 +116,11 @@ click, a `goto`), the destination page must visibly render before the scene ends
   least 0.6s after it. Raise the cap only when a *result* needs longer to be
   read (a page load, a toast).
 - **`highlight: true`** now works on `hover` actions as well as clicks — a
-  callout ring around the element you are describing.
+  callout ring around the element you are describing. Order differs by intent:
+  a click shows the ring first and then the cursor travels to it (the ring
+  marks where the click will land); a hover moves the cursor first and rings
+  the element once the pointer is resting on it. Hover the exact element the
+  narration names (a badge pill, not its whole tab).
 - **Event log** — `clips/NN.events.json` records `click`, `type` (start),
   `type_end` (measured, not estimated) and `key` events with ms offsets, plus
   `actions_end_ms`; `mix_clicks.py` and the timing checks read it.
