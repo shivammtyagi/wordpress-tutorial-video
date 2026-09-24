@@ -160,6 +160,11 @@ Read `doc.md`. Produce `script.json` per `references/scene-schema.md`:
   fixed time after launch is the browser-lifetime problem in Troubleshooting,
   not scene length.)
   Split a long explanation into two scenes rather than one long take.
+- Go beyond the doc when you can: if the user grants access to the product's
+  source (a repo, the installed plugin), read the code path behind the feature
+  and build the demo on what it actually does — a before/after the viewer can
+  see, plus one or two facts the doc leaves out (limits, side effects). Say in
+  the narration only what you verified on the live site.
 - Open the video on the screen it is about — never on a landing/license tab the
   viewer has no reason to see (use an `eval` setup action to point a menu link at
   the deep tab when showing navigation). Narrate only what the screen can show.
