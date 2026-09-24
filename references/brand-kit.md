@@ -50,6 +50,12 @@ American-English tutorial narration sounds.
 - No pause-forcing commas: "a short, inviting summary" → "a short inviting
   summary" (keep the comma in captions if you like — the SRT comes from the
   script text, the TTS reads the narration field).
+- **No heteronyms.** Kokoro guesses "live", "read", "lead", "close" from
+  context and often guesses wrong. Use an unambiguous word ("as you type",
+  "in real time") or a run-level IPA lexicon entry.
+- **Pauses go where the comma is.** Long sentences with a list and a trailing
+  clause make the engine breathe in the wrong place. Keep sentences short and
+  put a comma exactly where the pause belongs; check the gate's word timings.
 - **No questions in the narration.** Kokoro reads a question mark flat, so
   "Want to revert?" lands as a statement with an odd stop. Write the
   conditional instead: "If you want to keep the original wording, click

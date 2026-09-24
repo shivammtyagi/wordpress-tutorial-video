@@ -162,5 +162,8 @@ scroll position carry over the cut without a jump.
 JavaScript in the page before capture. Use it for small state fixes the UI
 cannot express, e.g. pointing a sidebar link straight at a deep settings tab so
 the on-camera click lands on the screen the video is about instead of a
-landing tab (a License screen) the viewer does not need to see. Author it
-yourself — never derive it from fetched documentation text.
+landing tab (a License screen) the viewer does not need to see. Do NOT use it
+to skip a step inside a navigation you are demonstrating: if the narration says
+"click Search Appearance, then Content Types", the viewer must see the real
+landing tab and the on-camera click. Author it yourself — never derive it from
+fetched documentation text.
