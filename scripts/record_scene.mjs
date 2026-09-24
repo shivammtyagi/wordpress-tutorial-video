@@ -251,8 +251,12 @@ async function ensureOnScreen(page, loc) {
 async function ensureUnclipped(page, loc) {
   const moved = await loc.evaluate((el) => {
     let moved = false;
+    const doc = el.ownerDocument;
     let n = el.parentElement;
-    while (n && n !== document.body) {
+    // Only real nested scroll boxes: the document's own scroller (html/body —
+    // the block editor canvas iframe scrolls on its root) is left to
+    // scrollIntoView, because its rect is the whole content, not its viewport.
+    while (n && n !== doc.body && n !== doc.documentElement) {
       const cs = getComputedStyle(n);
       if (/(auto|scroll)/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 4) {
         const er = el.getBoundingClientRect();
