@@ -318,6 +318,17 @@ async function login(page) {
   }
 }
 
+// Selector resolution. A selector may address an element inside an iframe
+// (the block editor's canvas is one): "frame=<iframe css> >> <inner css>"
+// resolves <inner css> through page.frameLocator(<iframe css>). boundingBox()
+// on a frame locator is reported in page coordinates, so the cursor glide,
+// highlight ring and coordinate clicks work unchanged.
+function locate(page, sel) {
+  const m = /^frame=(.+?)\s*>>\s*(.+)$/s.exec(sel || '');
+  if (m) return page.frameLocator(m[1].trim()).locator(m[2].trim()).first();
+  return page.locator(sel).first();
+}
+
 async function runAction(page, a) {
   const sel = a.selector;
   switch (a.type) {
@@ -330,7 +341,7 @@ async function runAction(page, a) {
       break;
     }
     case 'click': {
-      const loc = page.locator(sel).first();
+      const loc = locate(page, sel);
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
       await ensureUnclipped(page, loc);
       await ensureCentered(page, loc);
@@ -370,7 +381,7 @@ async function runAction(page, a) {
       break;
     }
     case 'type': {
-      const loc = page.locator(sel).first();
+      const loc = locate(page, sel);
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
       await ensureCentered(page, loc);
       const box = await glideCursorTo(page, loc);
@@ -393,7 +404,7 @@ async function runAction(page, a) {
       // Cursor first, ring second: the pointer lands on the element at the cue,
       // then the highlight frames what it is resting on (a click is the other
       // way round — the ring marks where the click will land).
-      const loc = page.locator(sel).first();
+      const loc = locate(page, sel);
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
       await ensureUnclipped(page, loc);
       await ensureCentered(page, loc);
@@ -417,7 +428,7 @@ async function runAction(page, a) {
       break;
     }
     case 'scroll': {
-      const loc = page.locator(sel).first();
+      const loc = locate(page, sel);
       await ensureUnclipped(page, loc);
       await loc.evaluate((el) =>
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })).catch(() => {});
@@ -439,7 +450,7 @@ async function runAction(page, a) {
       // the result of the previous scene's action (an AI run, a page load).
       if (sel) {
         // `hidden: true` inverts it: wait for the element to go away (a modal closing).
-        await page.locator(sel).first().waitFor({ state: a.hidden ? 'hidden' : 'visible', timeout: parseInt(a.text || '60000', 10) });
+        await locate(page, sel).waitFor({ state: a.hidden ? 'hidden' : 'visible', timeout: parseInt(a.text || '60000', 10) });
         await sleep(400);
       } else {
         await sleep(parseInt(a.text || '1000', 10));
@@ -637,7 +648,7 @@ const actionsEndMs = Date.now() - captureT0;
 let focusBox = null;
 if (scene.focus_selector) {
   try {
-    const b = await page.locator(scene.focus_selector).first().boundingBox();
+    const b = await locate(page, scene.focus_selector).boundingBox();
     if (b) {
       focusBox = { x: b.x / scale, y: b.y / scale,
                    width: b.width / scale, height: b.height / scale };
