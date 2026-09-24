@@ -293,6 +293,12 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
   `height`/`overflow: hidden` on its wrapper under CSS zoom. Diagnose under the
   zoomed viewport (native 1920 looks fine) and add an `inject_css` override:
   `.that-wrapper { height: auto !important; overflow: visible !important; }`.
+- **A popover/dropdown opens off-screen under `capture_scale: 2`** (recorder warns
+  `still off-screen after scroll (y=… of …)`) → JS positioning reads zoomed
+  coordinates but writes CSS px. Add a recorded-phase `eval` right after the
+  `wait` for it that pins it beside its trigger: set `position: fixed`,
+  `transform: none`, and `top`/`left` from the trigger's rect divided by the
+  document zoom, all `!important`. See the keywords run's Slug scene.
 - **Dropdown menus render collapsed/truncated on camera** → you are recording
   with `capture_scale: 2`. The 4K master works by CSS-zooming the document,
   and JS-positioned dropdowns (vue-multiselect etc.) mis-measure under zoom.
