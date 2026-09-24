@@ -134,11 +134,17 @@ const logEvent = (kind, extra = {}) => {
 
 // Glide the DOM cursor to an element's center (layout px = zoomed px / scale)
 // and wait out the transition. Returns the element's box for coordinate input.
-async function glideCursorTo(page, loc) {
-  const box = await loc.boundingBox().catch(() => null);
+function pointIn(box, at) {
+  if (at === 'start') return { x: box.x + 10 * scale, y: box.y + Math.min(box.height / 2, 14 * scale) };
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+
+async function glideCursorTo(page, loc, at) {
+  const box = await bbox(page, loc);
   if (!box) return null;
-  const x = (box.x + box.width / 2) / scale;
-  const y = (box.y + box.height / 2) / scale;
+  const pt = pointIn(box, at);
+  const x = pt.x / scale;
+  const y = pt.y / scale;
   await page.evaluate(([cx, cy]) => {
     const c = document.getElementById('__wtv_cursor');
     if (c) { c.style.left = cx + 'px'; c.style.top = cy + 'px'; }
@@ -151,11 +157,11 @@ async function glideCursorTo(page, loc) {
 // the pane, a tab switch re-layout) when we read its box; clicking the stale
 // point lands on whatever is there now — in the block editor that was the
 // "Meta Boxes" pane toggle. Wait until two consecutive readings agree.
-async function settledBox(loc) {
-  let prev = await loc.boundingBox().catch(() => null);
+async function settledBox(page, loc) {
+  let prev = await bbox(page, loc);
   for (let i = 0; i < 8; i++) {
     await sleep(150);
-    const cur = await loc.boundingBox().catch(() => null);
+    const cur = await bbox(page, loc);
     if (!cur || !prev) return cur;
     if (Math.abs(cur.y - prev.y) < 2 && Math.abs(cur.x - prev.x) < 2) return cur;
     prev = cur;
@@ -176,12 +182,12 @@ async function hitsTarget(loc, box, sel) {
 // Settle + verify before a coordinate click; re-center and retry once when the
 // point is covered. Returns the box to click (or null).
 async function clickableBox(page, loc, sel) {
-  let box = await settledBox(loc);
+  let box = await settledBox(page, loc);
   if (await hitsTarget(loc, box, sel)) return box;
   await loc.evaluate((el) => el.scrollIntoView({ behavior: 'instant', block: 'center' })).catch(() => {});
   await sleep(400);
   await glideCursorTo(page, loc);
-  box = await settledBox(loc);
+  box = await settledBox(page, loc);
   if (!(await hitsTarget(loc, box, sel))) {
     console.error(`record_scene: click point on "${sel}" is covered by another element — clicking anyway, check the frame`);
   }
@@ -214,7 +220,7 @@ async function pressEffect(page, box) {
 // Accent-colored callout ring (with page dim) around an element, drawn via the
 // screencast overlay so it sits in the recording but never in the DOM.
 async function showHighlight(page, loc) {
-  const box = await loc.boundingBox().catch(() => null);
+  const box = await bbox(page, loc);
   if (!box) return;
   // overlay lives inside the zoomed document → divide by scale
   const [hx, hy, hw, hh] = [box.x / scale, box.y / scale, box.width / scale, box.height / scale];
@@ -232,14 +238,14 @@ async function showHighlight(page, loc) {
 // every scrollable ancestor. Only used when the element is still off-screen,
 // so the cinematic scroll stays in charge for the normal case.
 async function ensureOnScreen(page, loc) {
-  const box = await loc.boundingBox().catch(() => null);
+  const box = await bbox(page, loc);
   if (!box) return;
   const vw = width * scale, vh = height * scale;
   const off = box.y < 0 || box.x < 0 || box.y + box.height > vh || box.x + box.width > vw;
   if (!off) return;
   await loc.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
   await sleep(450);
-  const b2 = await loc.boundingBox().catch(() => null);
+  const b2 = await bbox(page, loc);
   if (b2 && (b2.y < 0 || b2.y + b2.height > vh)) {
     console.error(`record_scene: element still off-screen after scroll (y=${Math.round(b2.y)} of ${vh}) — check the selector/scroll for this action`);
   }
@@ -370,8 +376,28 @@ async function login(page) {
 // highlight ring and coordinate clicks work unchanged.
 function locate(page, sel) {
   const m = /^frame=(.+?)\s*>>\s*(.+)$/s.exec(sel || '');
-  if (m) return page.frameLocator(m[1].trim()).locator(m[2].trim()).first();
+  if (m) {
+    const loc = page.frameLocator(m[1].trim()).locator(m[2].trim()).first();
+    loc.__frameSel = m[1].trim();
+    return loc;
+  }
   return page.locator(sel).first();
+}
+
+// Bounding box in page pixels. The capture CSS-zooms every document (the top
+// page AND the editor canvas iframe, since the init script runs in both), and
+// Playwright's boundingBox for a frame locator ignores the parent zoom applied
+// to the iframe box — it reported the intro paragraph 500px above where it was
+// drawn. Rebuild it: iframe box + inner rect × scale.
+async function bbox(page, loc) {
+  if (!loc.__frameSel) return loc.boundingBox().catch(() => null);
+  const fb = await page.locator(loc.__frameSel).first().boundingBox().catch(() => null);
+  const r = await loc.evaluate((el) => {
+    const q = el.getBoundingClientRect();
+    return { x: q.x, y: q.y, width: q.width, height: q.height };
+  }).catch(() => null);
+  if (!fb || !r) return null;
+  return { x: fb.x + r.x * scale, y: fb.y + r.y * scale, width: r.width * scale, height: r.height * scale };
 }
 
 async function runAction(page, a) {
@@ -432,11 +458,12 @@ async function runAction(page, a) {
       await ensureUnclipped(page, loc);
       await ensureCentered(page, loc);
       await ensureOnScreen(page, loc);
-      let box = await glideCursorTo(page, loc);
+      let box = await glideCursorTo(page, loc, a.click_at);
       if (box) box = await clickableBox(page, loc, sel);
       if (box) {
-        await pressEffect(page, box);
-        await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+        const pt = pointIn(box, a.click_at);
+        await pressEffect(page, { x: pt.x, y: pt.y, width: 0, height: 0 });
+        await page.mouse.click(pt.x, pt.y);
       } else {
         await loc.click({ force: true, timeout: 5000 });
       }
@@ -713,7 +740,7 @@ const actionsEndMs = Date.now() - captureT0;
 let focusBox = null;
 if (scene.focus_selector) {
   try {
-    const b = await locate(page, scene.focus_selector).boundingBox();
+    const b = await bbox(page, locate(page, scene.focus_selector));
     if (b) {
       focusBox = { x: b.x / scale, y: b.y / scale,
                    width: b.width / scale, height: b.height / scale };
