@@ -393,6 +393,12 @@ async function runAction(page, a) {
       }
       logEvent('click');
       await sleep(280); // let the focus/caret land so the click reads on camera
+      if (a.clear) {
+        // Empty the field before typing (input, textarea, contenteditable).
+        // Cmd+A is not honoured by every editor widget; fill('') is.
+        await loc.fill('').catch(() => {});
+        await sleep(150);
+      }
       logEvent('type', { chars: (a.text || '').length, delay: 60 });
       // keyboard.type targets the focused element (our click just focused it)
       // and performs no element re-checks that could scroll the page mid-word.
@@ -613,7 +619,12 @@ if (first && baseUrl && setupActions[0]?.type !== 'goto') {
   await preflight(page);
 }
 for (const a of setupActions) {
-  await runAction(page, a);
+  try {
+    await runAction(page, a);
+  } catch (err) {
+    err.message = `setup ${a.type} "${a.target}" (${a.selector || 'no selector'}): ${err.message}`;
+    throw err;
+  }
 }
 await sleep(400); // settle before capture
 
@@ -636,7 +647,12 @@ for (const a of recordedActions) {
     const wait = at - (Date.now() - recStart);
     if (wait > 0) await sleep(wait);
   }
-  await runAction(page, a);
+  try {
+    await runAction(page, a);
+  } catch (err) {
+    err.message = `${a.type} "${a.target}" (${a.selector || 'no selector'}): ${err.message}`;
+    throw err;
+  }
 }
 // when the last on-camera action finished — the post-processor never trims
 // the clip before this point, whatever the tail cap says.
