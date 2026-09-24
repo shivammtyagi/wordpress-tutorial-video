@@ -50,9 +50,12 @@ American-English tutorial narration sounds.
 - No pause-forcing commas: "a short, inviting summary" → "a short inviting
   summary" (keep the comma in captions if you like — the SRT comes from the
   script text, the TTS reads the narration field).
-- Questions must be phrased to carry rising intonation. If the TTS reads your
-  question like a statement, rephrase it ("Want to see every tag?" works
-  better than "Prefer to see everything that's available?").
+- **No questions in the narration.** Kokoro reads a question mark flat, so
+  "Want to revert?" lands as a statement with an odd stop. Write the
+  conditional instead: "If you want to keep the original wording, click
+  Revert." / "If you don't want the changes, then…". This also reads more
+  like a tutorial than a pitch. (Only Chatterbox could carry rising
+  intonation; don't rely on it.)
 - Brand names: verify pronunciation with the audio gate. Kokoro accepts IPA
   via `lexicon`; Chatterbox reads plain text well but test multi-word brand
   names ("All in One SEO" should flow as one unit).

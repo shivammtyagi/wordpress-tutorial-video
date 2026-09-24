@@ -166,8 +166,9 @@ Read `doc.md`. Produce `script.json` per `references/scene-schema.md`:
   a branded opener on scene 1 and a docs/support sign-off on the last scene.
   Narration explains WHY, the screen shows WHAT. Avoid commas that force a
   pause mid-thought ("a short, inviting summary" reads as a stall — drop the
-  comma in the narration text); phrase questions so they carry rising
-  intonation ("Want to see everything?" not "Prefer to see everything.").
+  comma in the narration text); **never write a question** — Kokoro reads a
+  question mark flat, so use the conditional statement instead ("If you want
+  to revert, then click Revert." not "Want to revert?").
 - `intent`: the scene's plain-language goal (becomes the MP4 chapter title).
 - `actions`: ordered steps with **human-language `target`s** and `selector: null`
   (discovery fills selectors). Types: `goto`, `click`, `type`, `press` (key or
