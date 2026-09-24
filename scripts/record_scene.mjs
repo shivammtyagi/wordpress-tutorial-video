@@ -147,6 +147,47 @@ async function glideCursorTo(page, loc) {
   return box;
 }
 
+// A target inside a scroll container may still be gliding (smooth scroll of
+// the pane, a tab switch re-layout) when we read its box; clicking the stale
+// point lands on whatever is there now — in the block editor that was the
+// "Meta Boxes" pane toggle. Wait until two consecutive readings agree.
+async function settledBox(loc) {
+  let prev = await loc.boundingBox().catch(() => null);
+  for (let i = 0; i < 8; i++) {
+    await sleep(150);
+    const cur = await loc.boundingBox().catch(() => null);
+    if (!cur || !prev) return cur;
+    if (Math.abs(cur.y - prev.y) < 2 && Math.abs(cur.x - prev.x) < 2) return cur;
+    prev = cur;
+  }
+  return prev;
+}
+
+// Would a click at the box center actually reach the element? (Not checked for
+// elements inside an iframe: their document has its own hit-testing.)
+async function hitsTarget(loc, box, sel) {
+  if (!box || /^frame=/.test(sel || '')) return true;
+  return loc.evaluate((el, [x, y]) => {
+    const h = document.elementFromPoint(x, y);
+    return !!h && (el === h || el.contains(h) || h.contains(el));
+  }, [box.x + box.width / 2, box.y + box.height / 2]).catch(() => true);
+}
+
+// Settle + verify before a coordinate click; re-center and retry once when the
+// point is covered. Returns the box to click (or null).
+async function clickableBox(page, loc, sel) {
+  let box = await settledBox(loc);
+  if (await hitsTarget(loc, box, sel)) return box;
+  await loc.evaluate((el) => el.scrollIntoView({ behavior: 'instant', block: 'center' })).catch(() => {});
+  await sleep(400);
+  await glideCursorTo(page, loc);
+  box = await settledBox(loc);
+  if (!(await hitsTarget(loc, box, sel))) {
+    console.error(`record_scene: click point on "${sel}" is covered by another element — clicking anyway, check the frame`);
+  }
+  return box;
+}
+
 // Visible press feedback AT the moment the real click fires: ripple ring plus
 // a quick cursor press-nudge. Must be called right before the mouse click so
 // the viewer sees cursor-arrive → press → result in the correct order.
@@ -352,7 +393,8 @@ async function runAction(page, a) {
       // the cinematic smooth scroll and visibly bounces the page on widgets
       // that never pass the stability check (vue-multiselect). We already
       // scrolled, glided, and verified visibility — click where the cursor is.
-      const box2 = await glideCursorTo(page, loc);
+      let box2 = await glideCursorTo(page, loc);
+      if (box2) box2 = await clickableBox(page, loc, sel);
       // page.screencast FREEZES on renderer-initiated cross-document
       // navigations (verified empirically; API goto records fine). For links
       // that leave the current document: perform the click visually with its
@@ -383,8 +425,11 @@ async function runAction(page, a) {
     case 'type': {
       const loc = locate(page, sel);
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
+      await ensureUnclipped(page, loc);
       await ensureCentered(page, loc);
-      const box = await glideCursorTo(page, loc);
+      await ensureOnScreen(page, loc);
+      let box = await glideCursorTo(page, loc);
+      if (box) box = await clickableBox(page, loc, sel);
       if (box) {
         await pressEffect(page, box);
         await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);

@@ -149,6 +149,11 @@ scroll position carry over the cut without a jump.
   Playwright's protocol scroll (`scrollIntoViewIfNeeded`) before acting, and
   logs when even that leaves it off-screen. For elements deep inside a tall
   window, still add an explicit `scroll` action first — it reads better.
+- Before every coordinate click the recorder waits for the target's box to
+  stop moving (a pane still smooth-scrolling, a tab re-layout) and checks that
+  the click point really reaches the element; if it is covered it re-centers
+  once and warns `click point … is covered`. A stale point once landed on the
+  block editor's "Meta Boxes" toggle and collapsed the whole pane.
 - When an action fails mid-scene the recorder saves `clips/NN.error.png` (the
   page at that moment), stops the capture and exits 1 — look at the screenshot
   before changing selectors.
