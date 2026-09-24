@@ -398,6 +398,14 @@ async function runAction(page, a) {
       await ensureOnScreen(page, loc);
       break;
     }
+    case 'eval': {
+      // Off-camera page JavaScript from the scene author (never from fetched
+      // docs): e.g. point a sidebar link straight at a settings tab so the
+      // on-camera click lands on the screen the video is about.
+      await page.evaluate(a.text);
+      await sleep(150);
+      break;
+    }
     case 'wait': {
       // plain: sleep `text` ms. With a selector: wait up to `text` ms (default
       // 60s) for that element to be visible — how a chained scene waits for

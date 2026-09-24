@@ -9,10 +9,10 @@ Two phases share one schema:
 an empty list means valid.
 """
 
-ACTION_TYPES = {"click", "type", "scroll", "hover", "wait", "goto", "press"}
+ACTION_TYPES = {"click", "type", "scroll", "hover", "wait", "goto", "press", "eval"}
 # Actions that never need a selector: `goto`/`wait` have no element, and
 # `press` sends a key or chord to whatever element already has focus.
-NO_SELECTOR = {"goto", "wait", "press"}
+NO_SELECTOR = {"goto", "wait", "press", "eval"}
 
 
 def validate_script(obj, discovered=False):
@@ -68,7 +68,7 @@ def validate_script(obj, discovered=False):
                     errors.append(f"{aloc}.type: must be one of {sorted(ACTION_TYPES)}")
                 if not ac.get("target"):
                     errors.append(f"{aloc}.target: required human-language description")
-                if ac.get("type") in ("type", "press") and not ac.get("text"):
+                if ac.get("type") in ("type", "press", "eval") and not ac.get("text"):
                     errors.append(f"{aloc}.text: required when type=='{ac.get('type')}'")
                 phase = ac.get("phase", "recorded")
                 if phase not in ("setup", "recorded"):

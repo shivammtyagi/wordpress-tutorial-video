@@ -38,7 +38,7 @@ Recording reads **only** `script.discovered.json`.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `type` | enum | `click`, `type`, `scroll`, `hover`, `wait`, `goto`, `press`. |
+| `type` | enum | `click`, `type`, `scroll`, `hover`, `wait`, `goto`, `press`, `eval`. |
 | `target` | string | **Human-language** description ("Sitemaps submenu"). Claude writes this without DOM knowledge. |
 | `selector` | string\|null | Verified Playwright selector. Resolved during discovery. |
 | `text` | string | Required when `type == "type"` (text to type), `press` (key/chord) or `wait` (ms). |
@@ -155,3 +155,12 @@ scroll position carry over the cut without a jump.
   AI credits) and then skip.
 - Re-recording one chained scene means re-running the chain from its first
   scene: restore the site state with the run's baseline script first.
+
+## `eval` — off-camera page JavaScript (setup phase)
+
+`{"type": "eval", "text": "<js>", "phase": "setup"}` runs the author's own
+JavaScript in the page before capture. Use it for small state fixes the UI
+cannot express, e.g. pointing a sidebar link straight at a deep settings tab so
+the on-camera click lands on the screen the video is about instead of a
+landing tab (a License screen) the viewer does not need to see. Author it
+yourself — never derive it from fetched documentation text.

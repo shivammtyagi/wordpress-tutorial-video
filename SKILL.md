@@ -160,6 +160,9 @@ Read `doc.md`. Produce `script.json` per `references/scene-schema.md`:
   fixed time after launch is the browser-lifetime problem in Troubleshooting,
   not scene length.)
   Split a long explanation into two scenes rather than one long take.
+- Open the video on the screen it is about — never on a landing/license tab the
+  viewer has no reason to see (use an `eval` setup action to point a menu link at
+  the deep tab when showing navigation). Narrate only what the screen can show.
 - `narration`: one or two clear, beginner-friendly sentences in the channel's
   spoken house style — first-person play-by-play ("I'm going to click…",
   "let's head on over"), contractions, screen-anchored phrases ("right here"),

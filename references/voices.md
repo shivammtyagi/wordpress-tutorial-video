@@ -50,7 +50,7 @@ reads as rushed. Set these in `config.json` and `tts_kokoro.py` switches to
 per-sentence synthesis joined with explicit silences:
 
 ```jsonc
-"tts_sentence_gap_s": 0.65,   // pause between sentences
+"tts_sentence_gap_s": 0.65,   // pause between sentences (0.75 read as slightly slow)
 "tts_paragraph_gap_s": 1.0,   // pause at a "\n" in the narration (new thought)
 "tts_min_words": 5,           // shorter sentences merge into a neighbour
 "tts_lead_s": 0.35,           // room before the first word
@@ -60,7 +60,7 @@ per-sentence synthesis joined with explicit silences:
 Write the narration with `\n` where the speaker would take a breath before a
 new idea ("Let's open the Basics tab.\nThe checks are sorted…"). Captions and
 the WER gate treat the newline as whitespace. With pauses included, delivery
-lands ~150–165 wpm at `speed` 0.95 — an unhurried tutorial pace. **Skip
+lands ~160–175 wpm at `speed` 0.95 — an unhurried tutorial pace (0.9 was judged slightly slow). **Skip
 `trim_audio.py`** (or run it with `--max-pause 5`) on this output: its pause
 compression would undo the deliberate gaps. Pair it with a longer still tail
 per scene (`tail_cap_s` ~1.2) so the picture breathes too.
