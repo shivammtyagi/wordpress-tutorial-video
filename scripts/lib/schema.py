@@ -36,6 +36,7 @@ def validate_script(obj, discovered=False):
         return errors
 
     seen_ids = set()
+    seen_screens, last_screen = set(), None
     for i, sc in enumerate(scenes):
         loc = f"scenes[{i}]"
         if not isinstance(sc, dict):
@@ -83,5 +84,18 @@ def validate_script(obj, discovered=False):
             errors.append(f"{loc}.setup_cmd: must be a non-empty string when present")
         if discovered and not sc.get("focus_selector"):
             errors.append(f"{loc}.focus_selector: must be resolved (non-null) after discovery")
+
+        # Storyboard rule: scenes on one screen are contiguous — a video visits
+        # each screen once and only moves forward (no editor → settings → editor).
+        screen = sc.get("screen")
+        if screen is not None:
+            if not isinstance(screen, str) or not screen.strip():
+                errors.append(f"{loc}.screen: must be a non-empty string when present")
+            else:
+                if screen != last_screen and screen in seen_screens:
+                    errors.append(f"{loc}.screen: screen '{screen}' reappears after '{last_screen}' "
+                                  "— group all scenes of a screen together (storyboard by screen)")
+                seen_screens.add(screen)
+                last_screen = screen
 
     return errors

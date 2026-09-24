@@ -174,3 +174,12 @@ A scene may set `"tts_speed": 0.88` to override the run's `speed` for that
 scene only. Use it for list-heavy or dense lines that read as rushed at the
 run's pace ("a summary, what we liked, a verdict, and an image"), together
 with a `\n` break before the list. Everything else keeps the run's pace.
+
+## `screen` — storyboard label (recommended on every scene)
+
+`"screen": "post editor"` names the screen a scene plays on. Scenes with the
+same label must be contiguous: `validate_script` fails with
+`screen 'post editor' reappears after 'search appearance'` when a video
+hops back to a screen it already left. Plan the screens first, group the
+narration per screen, and carry on-camera state forward inside a screen
+(chain the scenes or seed the earlier edits in `setup_cmd`).

@@ -137,7 +137,7 @@ with `--force` to redo it.
 | 1 | Create run dir + `config.json` | you | — |
 | 2 | Fetch & parse the doc | `python3 scripts/fetch_doc.py --run-dir <d>` | — |
 | 3 | Write `script.json` | **you** — see below | `scene-schema.md` |
-| 4 | Self-review the script | **you** — clarity, 155–165 wpm pacing, 4–12 scenes | `scene-schema.md` |
+| 4 | Self-review the script | **you** — clarity, pacing, 4–12 scenes, and the screen sequence: no screen revisited, state carried forward within a screen | `scene-schema.md` |
 | 5 | Voiceover + durations | `tts_chatterbox.py --run-dir <d>` (.venv-cbx; default) or `tts_kokoro.py` (.venv; fallback) | `voices.md` |
 | 5a | Trim silences + compress pauses | `trim_audio.py --run-dir <d>` (venv) — run BEFORE the gate. **Skip** in Kokoro natural pacing mode (its pauses are deliberate; edges are pre-trimmed) | `voices.md` |
 | 5b | **Audio gate** — per-scene WER + word offsets | `verify_scenes.py --run-dir <d>` (venv); on failure regenerate that scene's audio (engine script `--force --scene-id NN`), re-trim, and re-run `verify_scenes.py --scene-id NN`, at most `max_fix_iterations` times | `verification.md` |
@@ -160,6 +160,15 @@ Read `doc.md`. Produce `script.json` per `references/scene-schema.md`:
   fixed time after launch is the browser-lifetime problem in Troubleshooting,
   not scene length.)
   Split a long explanation into two scenes rather than one long take.
+- **Storyboard by screen before writing a word.** List the screens the video
+  needs in the order a user would reach them, then write ALL the narration for
+  a screen as one contiguous block of scenes. Each screen is visited once and
+  the video only moves forward — never editor → settings → editor → settings.
+  Label every scene with `screen` (e.g. `"screen": "post editor"`);
+  `schema.py` rejects a screen that reappears after a different one. Within a
+  screen, later scenes must show what earlier scenes changed on camera (a typed
+  sentence stays typed): record them as a chain, or seed the earlier edits with
+  `setup_cmd` — never reset state between scenes of the same screen.
 - Go beyond the doc when you can: if the user grants access to the product's
   source (a repo, the installed plugin), read the code path behind the feature
   and build the demo on what it actually does — a before/after the viewer can
