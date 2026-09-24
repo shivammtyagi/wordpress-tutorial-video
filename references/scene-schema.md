@@ -142,6 +142,8 @@ scroll position carry over the cut without a jump.
   scene's action). Add `"hidden": true` to wait for it to disappear instead (a
   window closing before the next click). Without a selector, `wait` sleeps
   `text` ms as before.
+- Targets inside a nested scroll box (a check list with a max-height, a modal
+  body) are scrolled into the middle of that box first, then the page scrolls.
 - If a click/hover target is still off-screen after the cinematic scroll (a
   modal footer below the fold, a nested scroller), the recorder falls back to
   Playwright's protocol scroll (`scrollIntoViewIfNeeded`) before acting, and

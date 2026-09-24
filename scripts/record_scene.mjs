@@ -204,6 +204,30 @@ async function ensureOnScreen(page, loc) {
   }
 }
 
+// Nested scroll boxes (a check list with a fixed max-height, a modal body):
+// scrollIntoView on the page alone leaves the element clipped by its scrollable
+// ancestor. Scroll each such ancestor so the element sits in its middle first.
+async function ensureUnclipped(page, loc) {
+  const moved = await loc.evaluate((el) => {
+    let moved = false;
+    let n = el.parentElement;
+    while (n && n !== document.body) {
+      const cs = getComputedStyle(n);
+      if (/(auto|scroll)/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 4) {
+        const er = el.getBoundingClientRect();
+        const ar = n.getBoundingClientRect();
+        if (er.top < ar.top + 8 || er.bottom > ar.bottom - 8) {
+          n.scrollTo({ top: n.scrollTop + (er.top - ar.top) - (ar.height / 2 - er.height / 2), behavior: 'smooth' });
+          moved = true;
+        }
+      }
+      n = n.parentElement;
+    }
+    return moved;
+  }).catch(() => false);
+  if (moved) await sleep(600);
+}
+
 // Scroll an element toward the viewport center only when it is not already
 // comfortably in view — avoids gratuitous page motion between actions.
 async function ensureCentered(page, loc) {
@@ -308,6 +332,7 @@ async function runAction(page, a) {
     case 'click': {
       const loc = page.locator(sel).first();
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
+      await ensureUnclipped(page, loc);
       await ensureCentered(page, loc);
       await ensureOnScreen(page, loc);
       if (a.highlight) await showHighlight(page, loc);
@@ -370,6 +395,7 @@ async function runAction(page, a) {
       // way round — the ring marks where the click will land).
       const loc = page.locator(sel).first();
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
+      await ensureUnclipped(page, loc);
       await ensureCentered(page, loc);
       await ensureOnScreen(page, loc);
       const box = await glideCursorTo(page, loc);
@@ -392,6 +418,7 @@ async function runAction(page, a) {
     }
     case 'scroll': {
       const loc = page.locator(sel).first();
+      await ensureUnclipped(page, loc);
       await loc.evaluate((el) =>
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })).catch(() => {});
       await sleep(600);

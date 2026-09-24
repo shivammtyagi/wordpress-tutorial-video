@@ -50,6 +50,11 @@ American-English tutorial narration sounds.
 - No pause-forcing commas: "a short, inviting summary" → "a short inviting
   summary" (keep the comma in captions if you like — the SRT comes from the
   script text, the TTS reads the narration field).
+- **Homophones that change the meaning.** "Too often looks spammy" was heard
+  as "two"; write "Using it too often can look spammy" so the context carries
+  it. Check too/two, for/four, there/their at clause starts.
+- **Breathe after the sign-off opener.** Write the wrap-up as
+  `"That's it!\nYou now know…"` so the paragraph gap gives the exclamation room.
 - **No heteronyms.** Kokoro guesses "live", "read", "lead", "close" from
   context and often guesses wrong. Use an unambiguous word ("as you type",
   "in real time") or a run-level IPA lexicon entry.
