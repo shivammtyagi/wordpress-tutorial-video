@@ -124,3 +124,34 @@ click, a `goto`), the destination page must visibly render before the scene ends
 - **Event log** — `clips/NN.events.json` records `click`, `type` (start),
   `type_end` (measured, not estimated) and `key` events with ms offsets, plus
   `actions_end_ms`; `mix_clicks.py` and the timing checks read it.
+
+## Chained scenes (one browser session, several captures)
+
+Some start states cannot be re-created off camera: the summary an AI run
+produces after a minute, the third step of a wizard. Record those scenes as a
+chain — `node scripts/record_scene.mjs --run-dir <d> --scene-ids 06,07,08` —
+and the recorder keeps ONE page across them: the first scene logs in, runs
+`setup_cmd` and its setup actions; every later scene runs only its own
+setup-phase actions in the same page (no login, no `goto`), then captures.
+Each capture is still a short clip; only the page persists, so the cursor and
+scroll position carry over the cut without a jump.
+
+- A chained scene's setup is usually a `wait` **with a selector**: `{"type":
+  "wait", "selector": ".summary", "text": "180000", "phase": "setup"}` waits up
+  to `text` ms for that element to be visible (the result of the previous
+  scene's action). Add `"hidden": true` to wait for it to disappear instead (a
+  window closing before the next click). Without a selector, `wait` sleeps
+  `text` ms as before.
+- If a click/hover target is still off-screen after the cinematic scroll (a
+  modal footer below the fold, a nested scroller), the recorder falls back to
+  Playwright's protocol scroll (`scrollIntoViewIfNeeded`) before acting, and
+  logs when even that leaves it off-screen. For elements deep inside a tall
+  window, still add an explicit `scroll` action first — it reads better.
+- When an action fails mid-scene the recorder saves `clips/NN.error.png` (the
+  page at that moment), stops the capture and exits 1 — look at the screenshot
+  before changing selectors.
+- If any scene in the chain already has a raw clip, the recorder refuses
+  before doing anything (pass `--force`) — a chain must not spend a minute (or
+  AI credits) and then skip.
+- Re-recording one chained scene means re-running the chain from its first
+  scene: restore the site state with the run's baseline script first.

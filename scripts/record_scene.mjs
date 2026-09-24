@@ -7,6 +7,15 @@
 //
 //   node record_scene.mjs --run-dir <dir> --scene-id 01 \
 //        [--base-url https://site.test] [--force]
+//   node record_scene.mjs --run-dir <dir> --scene-ids 06,07,08 ...   (chained)
+//
+// Chained scenes (--scene-ids): ONE browser session records several scenes in
+// order — the first scene logs in and runs its setup; each later scene runs
+// only its own setup-phase actions (typically a `wait` for the state the
+// previous scene's action produced) in the same page, then captures. Use it
+// when a scene's start state is the *result* of the previous scene (an AI run
+// that takes a minute, a wizard) and cannot be re-created off camera. Every
+// capture still stays short; only the page persists.
 //
 // Credentials (for real WP sites) are read from the env vars named in
 // config.json (wp_user_env / wp_pass_env), never hard-coded.
@@ -35,12 +44,16 @@ function arg(name, def = undefined) {
 }
 
 const runDir = arg('run-dir');
-const sceneId = arg('scene-id');
+const sceneIdsArg = arg('scene-ids');
+const sceneIds = typeof sceneIdsArg === 'string' && sceneIdsArg
+  ? sceneIdsArg.split(',').map((x) => x.trim()).filter(Boolean)
+  : (arg('scene-id') ? [arg('scene-id')] : []);
 const force = !!arg('force');
-if (!runDir || !sceneId) {
-  console.error('record_scene: --run-dir and --scene-id are required');
+if (!runDir || !sceneIds.length) {
+  console.error('record_scene: --run-dir and --scene-id (or --scene-ids a,b,c) are required');
   process.exit(2);
 }
+const chained = sceneIds.length > 1;
 
 const cfgPath = join(runDir, 'config.json');
 const cfg = existsSync(cfgPath) ? JSON.parse(readFileSync(cfgPath, 'utf8')) : {};
@@ -48,8 +61,14 @@ const scriptPath = existsSync(join(runDir, 'script.discovered.json'))
   ? join(runDir, 'script.discovered.json')
   : join(runDir, 'script.json');
 const script = JSON.parse(readFileSync(scriptPath, 'utf8'));
-const scene = script.scenes.find((s) => s.id === sceneId);
-if (!scene) { console.error(`record_scene: scene ${sceneId} not found`); process.exit(2); }
+const scenes = sceneIds.map((id) => {
+  const sc = script.scenes.find((s) => s.id === id);
+  if (!sc) { console.error(`record_scene: scene ${id} not found`); process.exit(2); }
+  return sc;
+});
+// per-scene mutable context (set by beginScene)
+let scene = scenes[0];
+let sceneId = scene.id;
 
 const [width, height] = (script.resolution || cfg.resolution || '1920x1080')
   .split('x').map((n) => parseInt(n, 10));
@@ -61,25 +80,40 @@ const isFixture = !!baseUrl && baseUrl.startsWith('file://');
 
 const durations = existsSync(join(runDir, 'audio', 'durations.json'))
   ? JSON.parse(readFileSync(join(runDir, 'audio', 'durations.json'), 'utf8')) : {};
-const narrationMs = Math.round((durations[sceneId] || 0) * 1000);
+let narrationMs = 0;
+let sceneWords = [];
+let outPath = '';
+let focusOut = '';
+mkdirSync(join(runDir, 'clips'), { recursive: true });
 
-const wordsPath = join(runDir, 'verify', 'scenes', `${sceneId}.json`);
-const sceneWords = existsSync(wordsPath)
-  ? JSON.parse(readFileSync(wordsPath, 'utf8')).words || [] : [];
+function beginScene(sc) {
+  scene = sc;
+  sceneId = sc.id;
+  narrationMs = Math.round((durations[sceneId] || 0) * 1000);
+  const wordsPath = join(runDir, 'verify', 'scenes', `${sceneId}.json`);
+  sceneWords = existsSync(wordsPath)
+    ? JSON.parse(readFileSync(wordsPath, 'utf8')).words || [] : [];
+  outPath = join(runDir, 'clips', `${sceneId}.raw.webm`);
+  focusOut = join(runDir, 'clips', `${sceneId}.focus.json`);
+  cueCursor = 0;
+  events.length = 0;
+}
 
-const outPath = join(runDir, 'clips', `${sceneId}.raw.webm`);
-const focusOut = join(runDir, 'clips', `${sceneId}.focus.json`);
-mkdirSync(dirname(outPath), { recursive: true });
-if (existsSync(outPath) && statSync(outPath).size > 0 && !force) {
-  console.log(`record_scene: scene ${sceneId} already recorded (use --force)`);
-  process.exit(0);
+// Already-recorded check happens for every listed scene BEFORE any browser
+// work: a chain must not spend a minute (or AI credits) and then skip.
+for (const sc of scenes) {
+  const p = join(runDir, 'clips', `${sc.id}.raw.webm`);
+  if (existsSync(p) && statSync(p).size > 0 && !force) {
+    console.log(`record_scene: scene ${sc.id} already recorded (use --force)`);
+    process.exit(0);
+  }
 }
 
 // ---- destructive-action guard -------------------------------------------------
 const DESTRUCTIVE = /delete|remove|trash|deactivate|uninstall|reset/i;
-const risky = (scene.actions || []).filter((a) =>
+const risky = scenes.flatMap((sc) => (sc.actions || []).filter((a) =>
   (a.phase ?? 'recorded') === 'recorded' && a.type === 'click' &&
-  (DESTRUCTIVE.test(a.target || '') || DESTRUCTIVE.test(a.selector || '')));
+  (DESTRUCTIVE.test(a.target || '') || DESTRUCTIVE.test(a.selector || ''))));
 if (risky.length && !cfg.allow_destructive) {
   console.error('record_scene: DESTRUCTIVE actions blocked (set allow_destructive=true to permit):');
   for (const a of risky) console.error(`  - ${a.target} (${a.selector})`);
@@ -150,6 +184,24 @@ async function showHighlight(page, loc) {
     `box-shadow:0 0 0 9999px rgba(0,0,0,.12);pointer-events:none;"></div>`,
     { duration: 1200 });
   await sleep(250);
+}
+
+// Fallback for elements a DOM scrollIntoView cannot reach (nested scrollers,
+// a modal footer below the fold): Playwright's protocol-level scroll handles
+// every scrollable ancestor. Only used when the element is still off-screen,
+// so the cinematic scroll stays in charge for the normal case.
+async function ensureOnScreen(page, loc) {
+  const box = await loc.boundingBox().catch(() => null);
+  if (!box) return;
+  const vw = width * scale, vh = height * scale;
+  const off = box.y < 0 || box.x < 0 || box.y + box.height > vh || box.x + box.width > vw;
+  if (!off) return;
+  await loc.scrollIntoViewIfNeeded({ timeout: 5000 }).catch(() => {});
+  await sleep(450);
+  const b2 = await loc.boundingBox().catch(() => null);
+  if (b2 && (b2.y < 0 || b2.y + b2.height > vh)) {
+    console.error(`record_scene: element still off-screen after scroll (y=${Math.round(b2.y)} of ${vh}) — check the selector/scroll for this action`);
+  }
 }
 
 // Scroll an element toward the viewport center only when it is not already
@@ -257,6 +309,7 @@ async function runAction(page, a) {
       const loc = page.locator(sel).first();
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
       await ensureCentered(page, loc);
+      await ensureOnScreen(page, loc);
       if (a.highlight) await showHighlight(page, loc);
       // Coordinate input, never loc.click(): Playwright's actionability loop
       // re-fires its own instant scrollIntoView on every retry, which fights
@@ -318,6 +371,7 @@ async function runAction(page, a) {
       const loc = page.locator(sel).first();
       await loc.waitFor({ state: 'visible', timeout: actionTimeout });
       await ensureCentered(page, loc);
+      await ensureOnScreen(page, loc);
       const box = await glideCursorTo(page, loc);
       if (box) {
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -337,13 +391,24 @@ async function runAction(page, a) {
       break;
     }
     case 'scroll': {
-      await page.locator(sel).first().evaluate((el) =>
+      const loc = page.locator(sel).first();
+      await loc.evaluate((el) =>
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })).catch(() => {});
       await sleep(600);
+      await ensureOnScreen(page, loc);
       break;
     }
     case 'wait': {
-      await sleep(parseInt(a.text || '1000', 10));
+      // plain: sleep `text` ms. With a selector: wait up to `text` ms (default
+      // 60s) for that element to be visible — how a chained scene waits for
+      // the result of the previous scene's action (an AI run, a page load).
+      if (sel) {
+        // `hidden: true` inverts it: wait for the element to go away (a modal closing).
+        await page.locator(sel).first().waitFor({ state: a.hidden ? 'hidden' : 'visible', timeout: parseInt(a.text || '60000', 10) });
+        await sleep(400);
+      } else {
+        await sleep(parseInt(a.text || '1000', 10));
+      }
       break;
     }
     default:
@@ -358,7 +423,14 @@ async function runAction(page, a) {
 // Consequence: element coordinates from boundingBox() come back in zoomed
 // (master) pixels — divide by `scale` before positioning injected overlays
 // (they live inside the zoomed document and get re-scaled on render).
-const browser = await chromium.launch();
+// Browser binary: the bundled Playwright Chromium by default, or an installed
+// channel (`browser_channel: "chrome"` → Google Chrome with a throwaway
+// profile — never the user's running instance). Use a channel when the
+// bundled headless shell is unstable on the machine (see SKILL.md
+// troubleshooting: "browser dies ~30s after launch").
+const launchOpts = {};
+if (cfg.browser_channel) launchOpts.channel = cfg.browser_channel;
+const browser = await chromium.launch(launchOpts);
 const context = await browser.newContext({
   viewport: { width: width * scale, height: height * scale },
   ignoreHTTPSErrors: cfg.ignore_https_errors !== false,
@@ -389,6 +461,24 @@ await context.addInitScript(`(() => {
   document.addEventListener('DOMContentLoaded', mk);
   mk();
 })()`);
+if (cfg.inject_css) {
+  // Capture-time CSS overrides for layout that misbehaves under the CSS-zoom
+  // 4K capture (a modal sized in vh that outgrows the viewport, a dropdown
+  // that mis-measures). Applied to every page the recorder opens, never to the
+  // site itself.
+  const css = JSON.stringify(String(cfg.inject_css));
+  await context.addInitScript(`(() => {
+    const add = () => {
+      if (document.getElementById('__wtv_css') || !document.head) return;
+      const st = document.createElement('style');
+      st.id = '__wtv_css';
+      st.textContent = ${css};
+      document.head.appendChild(st);
+    };
+    document.addEventListener('DOMContentLoaded', add);
+    add();
+  })()`);
+}
 if ((cfg.dismiss_selectors || []).length) {
   // remove configured page elements (promo banners, CTAs) the moment they
   // render — covers SPA content that appears after DOMContentLoaded.
@@ -432,11 +522,14 @@ const page = await context.newPage();
 // only symptom is a late "Target page ... has been closed" from screencast.stop.
 page.on('crash', () => console.error('record_scene: PAGE CRASHED (renderer died) — heavy page under capture?'));
 page.on('close', () => { if (capturing) console.error(`record_scene: page closed during capture at +${((Date.now() - captureT0) / 1000).toFixed(1)}s`); });
+const launchedAt = Date.now();
 browser.on('disconnected', () => {
   if (!capturing) return;
-  console.error(`record_scene: BROWSER PROCESS DIED at +${((Date.now() - captureT0) / 1000).toFixed(1)}s of capture. ` +
-    'Long captures exhaust memory (screencast frames accumulate until stop). ' +
-    'Split this scene so each capture stays under ~20s, and free memory (close other browsers).');
+  console.error(`record_scene: BROWSER PROCESS DIED at +${((Date.now() - captureT0) / 1000).toFixed(1)}s of capture ` +
+    `(${((Date.now() - launchedAt) / 1000).toFixed(1)}s after launch). ` +
+    'If it always dies ~30s after launch regardless of the page, the bundled headless shell is unstable on this ' +
+    'machine: set "browser_channel": "chrome" in config.json (scripts/browser_lifetime_check.mjs confirms). ' +
+    'Otherwise split the scene so each capture stays short and free memory.');
   process.exit(7);
 });
 page.on('pageerror', (e) => console.error(`record_scene: page error: ${String(e.message || e).slice(0, 200)}`));
@@ -445,18 +538,25 @@ page.on('pageerror', (e) => console.error(`record_scene: page error: ${String(e.
 // this scene starts from (e.g. a wp-cli call that pre-adds what an earlier
 // scene created on camera). Runs before login, off camera. The script author
 // writes it — never derive it from fetched documentation text.
-if (scene.setup_cmd) {
-  console.log(`record_scene: setup_cmd → ${scene.setup_cmd}`);
-  execSync(scene.setup_cmd, { stdio: 'inherit', shell: '/bin/zsh' });
+// In a chain only the FIRST scene's hook runs (the page persists after that).
+if (scenes[0].setup_cmd) {
+  console.log(`record_scene: setup_cmd → ${scenes[0].setup_cmd}`);
+  execSync(scenes[0].setup_cmd, { stdio: 'inherit', shell: '/bin/zsh' });
 }
 
 await login(page);
+
+for (let si = 0; si < scenes.length; si++) {
+beginScene(scenes[si]);
+const first = si === 0;
+try {
+if (chained) console.log(`record_scene: chain ${si + 1}/${scenes.length} → scene ${sceneId}`);
 
 // ---- setup phase (off camera): reach the scene's start state -------------------
 const setupActions = (scene.actions || []).filter((a) => (a.phase ?? 'recorded') === 'setup');
 const recordedActions = (scene.actions || []).filter((a) => (a.phase ?? 'recorded') !== 'setup');
 
-if (baseUrl && setupActions[0]?.type !== 'goto') {
+if (first && baseUrl && setupActions[0]?.type !== 'goto') {
   const target = isFixture ? baseUrl : baseUrl.replace(/\/$/, '') + '/wp-admin/';
   await page.goto(target, { waitUntil: 'domcontentloaded' });
   await preflight(page);
@@ -520,8 +620,19 @@ await page.screencast.stop();
 capturing = false;
 writeFileSync(join(runDir, 'clips', `${sceneId}.events.json`),
   JSON.stringify({ events, actions_end_ms: actionsEndMs }, null, 2));
-await browser.close();
 
 const size = statSync(outPath).size;
 if (!size) { console.error('record_scene: empty recording'); process.exit(4); }
 console.log(`record_scene: wrote ${outPath} (${size} bytes, ${width * scale}x${height * scale})`);
+} catch (err) {
+  // Evidence before exit: what the page looked like when the action failed.
+  const shot = join(runDir, 'clips', `${sceneId}.error.png`);
+  console.error(`record_scene: scene ${sceneId} FAILED: ${String(err.message || err).split('\n')[0].slice(0, 200)}`);
+  try { await page.screenshot({ path: shot }); console.error(`record_scene: page state saved to ${shot}`); } catch { /* page gone */ }
+  if (capturing) { try { await page.screencast.stop(); } catch { /* ignore */ } capturing = false; }
+  try { await browser.close(); } catch { /* ignore */ }
+  process.exit(1);
+}
+} // end per-scene loop
+
+await browser.close();

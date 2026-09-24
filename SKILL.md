@@ -78,9 +78,11 @@ Create the run directory `runs/<slug>-<hash>/` and write `config.json`:
   "intro_subtitle": "A step-by-step WordPress tutorial",
   "tail_cap_s": 0.4,                         // max still-frame tail after narration (per-scene: tail_cap_s on the scene)
   "dismiss_selectors": [],                   // page elements to remove while recording (promo banners, NPS modals)
+  "inject_css": "",                          // capture-time CSS overrides (e.g. keep a tall modal inside the viewport under capture_scale 2)
   "ignore_https_errors": true,               // self-signed local sites (Local, Laravel Valet…)
   "action_timeout_ms": 10000,                // fail-fast selector waits
   "capture_scale": 1,                        // 1 = native layout (safe); 2 = 4K master via CSS zoom — see caveat below
+  "browser_channel": null,                   // null = bundled Playwright Chromium; "chrome" = installed Google Chrome (own temp profile)
   "dismiss_notices": true,                   // remove .notice/.update-nag before recording
   "allow_destructive": false,                // guard scenes clicking delete/deactivate/…
   "redact_selectors": [],                    // blur these elements while recording
@@ -140,7 +142,7 @@ with `--force` to redo it.
 | 5a | Trim silences + compress pauses | `trim_audio.py --run-dir <d>` (venv) — run BEFORE the gate. **Skip** in Kokoro natural pacing mode (its pauses are deliberate; edges are pre-trimmed) | `voices.md` |
 | 5b | **Audio gate** — per-scene WER + word offsets | `verify_scenes.py --run-dir <d>` (venv); on failure regenerate that scene's audio (engine script `--force --scene-id NN`), re-trim, and re-run `verify_scenes.py --scene-id NN`, at most `max_fix_iterations` times | `verification.md` |
 | 6 | Discover selectors + plan phases/cues | **you** — explore the live site | `selector-discovery.md` |
-| 7 | Record each scene | `node scripts/record_scene.mjs --run-dir <d> --scene-id NN --base-url <site>` | `recording-tuning.md` |
+| 7 | Record each scene | `node scripts/record_scene.mjs --run-dir <d> --scene-id NN --base-url <site>`; scenes whose start state is the *result* of the previous scene (an AI run, a wizard) record as a chain: `--scene-ids 06,07,08` (see `scene-schema.md` → Chained scenes) | `recording-tuning.md` |
 | 8 | Post-process each clip | `postprocess_clip.py --run-dir <d> --scene-id NN [--zoom]` | `ffmpeg-recipes.md` |
 | 9 | Compose (timeline, chapters, captions, faststart) | `compose.py --run-dir <d>`; add `--deliver-4k` for the master-resolution edition (needs `capture_scale: 2` + `deliver_4k: true`) | `ffmpeg-recipes.md` |
 | 9b | Mix click sounds at recorded event times | `mix_clicks.py --run-dir <d>` | `ffmpeg-recipes.md` |
@@ -153,8 +155,10 @@ with `--force` to redo it.
 
 Read `doc.md`. Produce `script.json` per `references/scene-schema.md`:
 - One spoken idea per scene; 4–12 scenes for a single doc. **Keep each scene's
-  narration under ~20 seconds** (≈50 words): captures longer than ~23s can
-  exhaust memory and kill the browser mid-recording (recorder exit code 7).
+  narration under ~20 seconds** (≈50 words): one idea per cut keeps the pace
+  calm, and short captures stay cheap to re-record. (A recorder that dies at a
+  fixed time after launch is the browser-lifetime problem in Troubleshooting,
+  not scene length.)
   Split a long explanation into two scenes rather than one long take.
 - `narration`: one or two clear, beginner-friendly sentences in the channel's
   spoken house style — first-person play-by-play ("I'm going to click…",
@@ -258,6 +262,14 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
 - **bootstrap creates an x86_64 venv on Apple Silicon** (Intel Homebrew under
   Rosetta) → PyTorch has no macOS x86_64 wheels; bootstrap pins an arm64
   CPython and verifies the venv arch, failing loudly instead of silently.
+- **A modal/dialog outgrows the viewport under `capture_scale: 2`** (its header
+  is cut off at the top, its footer buttons sit below the fold and clicks on
+  them miss) → the window is sized with viewport units, which the CSS-zoom
+  capture doubles. Add an `inject_css` override in the run config that caps
+  the window in px and lets its body scroll, e.g.
+  `.modal-container{max-height:1000px!important;display:flex!important;flex-direction:column!important}
+  .modal-body{flex:1 1 auto!important;min-height:0!important;overflow-y:auto!important}`.
+  Verify on a screenshot before recording.
 - **Dropdown menus render collapsed/truncated on camera** → you are recording
   with `capture_scale: 2`. The 4K master works by CSS-zooming the document,
   and JS-positioned dropdowns (vue-multiselect etc.) mis-measure under zoom.
@@ -265,12 +277,19 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
   (True `deviceScaleFactor` capture doesn't help: Playwright's screencast
   records CSS pixels and letterboxes larger sizes — verified empirically.)
 - **Recording dies with `screencast.stop: Target page, context or browser has
-  been closed`** → the tab crashed under the 4K CSS-zoom capture on a heavy page
-  (block editor with large plugin panels). Systematic, not flaky: set
-  `capture_scale: 1` for that run. Lighter admin/settings screens tolerate 2.
-- **Recorder exits 7: `BROWSER PROCESS DIED at +23s of capture`** → the scene is
-  too long for the machine's free memory (screencast frames accumulate until
-  stop). Split the scene so each capture stays under ~20s; close other browsers.
+  been closed`, or exit 7 at a consistent time after launch** → almost always
+  the bundled-browser lifetime problem below, not the page or the capture
+  scale (the block editor records fine at `capture_scale: 2` once the browser
+  survives). Check the lifetime first; only then consider `capture_scale: 1`.
+- **Recorder exits 7 / "BROWSER PROCESS DIED" ~30s after launch, on any page**
+  → on some Macs Playwright's bundled headless shell is killed silently about
+  30s after launch even on `about:blank` (it is not memory and not the scene).
+  Confirm with `node scripts/browser_lifetime_check.mjs` (dies) vs
+  `node scripts/browser_lifetime_check.mjs chrome` (survives), then set
+  `"browser_channel": "chrome"` in the run's `config.json`. Playwright drives
+  the installed Google Chrome with a throwaway profile — the user's running
+  Chrome and any Playwright MCP browser are untouched. Keeping captures short
+  is still good practice, but it is not the fix for this one.
 - **The page "randomly scrolls" around clicks** → never use Playwright
   `loc.click()` in the recorder: its actionability retries re-fire
   scrollIntoView and fight the cinematic scroll. The recorder clicks by mouse
