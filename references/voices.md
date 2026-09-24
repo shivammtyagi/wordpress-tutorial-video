@@ -65,6 +65,9 @@ lands ~160–175 wpm at `speed` 0.95 — an unhurried tutorial pace (0.9 was jud
 compression would undo the deliberate gaps. Pair it with a longer still tail
 per scene (`tail_cap_s` ~1.2) so the picture breathes too.
 
+Per-scene rate: a scene may carry `"tts_speed": 0.88` to slow just that scene
+(list-heavy lines read as rushed at the run's pace). See `scene-schema.md`.
+
 ### Pronunciation control (the audio-gate insurance)
 
 1. **Lexicon** — `references/lexicon.json` maps product terms to IPA; add
@@ -74,6 +77,9 @@ per scene (`tail_cap_s` ~1.2) so the picture breathes too.
    ("aioseo dot com slash docs"), versions expanded ("version five point nine
    point three"), `wp-admin` → "W P admin", file extensions spelled.
 3. Known weak spots: non-Anglo proper nouns and heteronyms (lead/live/read).
+   A lexicon entry can also make things WORSE: `plugin` → `ˈplʌɡɪn` came out
+   as "up-plugin" while the plain word reads fine. Probe every new entry
+   (synthesize + transcribe) and only keep entries that fix a real misread.
    If the audio gate keeps flagging a term, add a lexicon entry.
 
 ## Upgrade: Chatterbox (expressive / cloned voice — opt-in, FOSS)

@@ -167,3 +167,10 @@ to skip a step inside a navigation you are demonstrating: if the narration says
 "click Search Appearance, then Content Types", the viewer must see the real
 landing tab and the on-camera click. Author it yourself — never derive it from
 fetched documentation text.
+
+## `tts_speed` — per-scene speaking rate (Kokoro)
+
+A scene may set `"tts_speed": 0.88` to override the run's `speed` for that
+scene only. Use it for list-heavy or dense lines that read as rushed at the
+run's pace ("a summary, what we liked, a verdict, and an image"), together
+with a `\n` break before the list. Everything else keeps the run's pace.

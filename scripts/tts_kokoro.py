@@ -174,8 +174,10 @@ def main():
         sid = scene["id"]
         tts_text = norm.for_tts(scene["narration"], lexicon)
         ref_text = norm.for_ref(scene["narration"], lexicon)
+        # per-scene override: slow a list-heavy or dense scene without touching the rest
+        scene_speed = float(scene.get("tts_speed", speed))
         pace_key = json.dumps(pacing, sort_keys=True) if pacing else ""
-        key = hashlib.sha256(f"{args.engine}|{voice}|{speed}|{pace_key}|{tts_text}".encode()).hexdigest()
+        key = hashlib.sha256(f"{args.engine}|{voice}|{scene_speed}|{pace_key}|{tts_text}".encode()).hexdigest()
         cached = os.path.join(cache_dir, f"{key}.wav")
         out = os.path.join(audio_dir, f"{sid}.wav")
 
@@ -187,9 +189,9 @@ def main():
                     from kokoro import KPipeline
                     pipeline = KPipeline(lang_code="a")  # American English
                 if pacing:
-                    pcm, _ = _kokoro_synth_paced(pipeline, tts_text, voice, speed, pacing)
+                    pcm, _ = _kokoro_synth_paced(pipeline, tts_text, voice, scene_speed, pacing)
                 else:
-                    pcm, _ = _kokoro_synth(pipeline, tts_text, voice, speed)
+                    pcm, _ = _kokoro_synth(pipeline, tts_text, voice, scene_speed)
             _write_wav(cached, pcm)
         shutil.copyfile(cached, out)
         with wave.open(out, "rb") as w:
@@ -197,7 +199,8 @@ def main():
         durations[sid] = round(secs, 3)
         meta[sid] = {"hash": key, "ref_text": ref_text, "tts_text": tts_text}
         wpm = len(ref_text.split()) / secs * 60 if secs else 0
-        print(f"tts: scene {sid} -> {out} ({secs:.2f}s, {wpm:.0f} wpm incl. pauses)")
+        note = f", speed {scene_speed}" if scene_speed != speed else ""
+        print(f"tts: scene {sid} -> {out} ({secs:.2f}s, {wpm:.0f} wpm incl. pauses{note})")
 
     rd.write_json(os.path.join(audio_dir, "durations.json"), durations)
     rd.write_json(os.path.join(audio_dir, "tts_meta.json"), meta)
