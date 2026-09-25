@@ -275,7 +275,9 @@ async function ensureUnclipped(page, loc) {
         // center it unless it already sits comfortably inside the box (15% margins)
         const m = ar.height * 0.15;
         if (er.top < ar.top + m || er.bottom > ar.bottom - m) {
-          n.scrollTo({ top: n.scrollTop + (er.top - ar.top) - (ar.height / 2 - er.height / 2), behavior: 'smooth' });
+          // rects are zoomed (rendered) px, scrollTop is unzoomed CSS px — convert
+          const k = ar.height / n.clientHeight || 1;
+          n.scrollTo({ top: n.scrollTop + ((er.top - ar.top) - (ar.height / 2 - er.height / 2)) / k, behavior: 'smooth' });
           moved = true;
         }
       }
