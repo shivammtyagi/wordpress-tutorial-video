@@ -272,7 +272,9 @@ async function ensureUnclipped(page, loc) {
       if (/(auto|scroll)/.test(cs.overflowY) && n.scrollHeight > n.clientHeight + 4) {
         const er = el.getBoundingClientRect();
         const ar = n.getBoundingClientRect();
-        if (er.top < ar.top + 8 || er.bottom > ar.bottom - 8) {
+        // center it unless it already sits comfortably inside the box (15% margins)
+        const m = ar.height * 0.15;
+        if (er.top < ar.top + m || er.bottom > ar.bottom - m) {
           n.scrollTo({ top: n.scrollTop + (er.top - ar.top) - (ar.height / 2 - er.height / 2), behavior: 'smooth' });
           moved = true;
         }
