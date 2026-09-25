@@ -140,7 +140,7 @@ const logEvent = (kind, extra = {}) => {
 // Glide the DOM cursor to an element's center (layout px = zoomed px / scale)
 // and wait out the transition. Returns the element's box for coordinate input.
 function pointIn(box, at) {
-  if (at === 'start') return { x: box.x + 10 * zoom, y: box.y + Math.min(box.height / 2, 14 * zoom) };
+  if (at === 'start') return { x: box.x + 2 * zoom, y: box.y + Math.min(box.height / 2, 14 * zoom) }; // inside the first glyph's left half → caret before it
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
