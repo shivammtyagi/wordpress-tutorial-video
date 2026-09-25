@@ -73,6 +73,11 @@ let sceneId = scene.id;
 const [width, height] = (script.resolution || cfg.resolution || '1920x1080')
   .split('x').map((n) => parseInt(n, 10));
 const scale = Number(cfg.capture_scale ?? 2);
+// Document zoom. Defaults to the capture scale (layout = delivery resolution);
+// a smaller value zooms the UI out so more fits in the frame — ui_zoom 1.5
+// with capture_scale 2 lays the page out at 2560x1440 inside the 4K capture
+// (everything appears at 75% of the 1080p-layout size).
+const zoom = Number(cfg.ui_zoom ?? scale);
 const baseUrl = arg('base-url', cfg.base_url || cfg.site_url);
 const actionTimeout = Number(cfg.action_timeout_ms ?? 10000);
 const accent = cfg.accent_color || '#2271b1'; // highlight/ripple color (WP admin blue default)
@@ -135,7 +140,7 @@ const logEvent = (kind, extra = {}) => {
 // Glide the DOM cursor to an element's center (layout px = zoomed px / scale)
 // and wait out the transition. Returns the element's box for coordinate input.
 function pointIn(box, at) {
-  if (at === 'start') return { x: box.x + 10 * scale, y: box.y + Math.min(box.height / 2, 14 * scale) };
+  if (at === 'start') return { x: box.x + 10 * zoom, y: box.y + Math.min(box.height / 2, 14 * zoom) };
   return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
 }
 
@@ -143,8 +148,8 @@ async function glideCursorTo(page, loc, at) {
   const box = await bbox(page, loc);
   if (!box) return null;
   const pt = pointIn(box, at);
-  const x = pt.x / scale;
-  const y = pt.y / scale;
+  const x = pt.x / zoom;
+  const y = pt.y / zoom;
   await page.evaluate(([cx, cy]) => {
     const c = document.getElementById('__wtv_cursor');
     if (c) { c.style.left = cx + 'px'; c.style.top = cy + 'px'; }
@@ -198,8 +203,8 @@ async function clickableBox(page, loc, sel) {
 // a quick cursor press-nudge. Must be called right before the mouse click so
 // the viewer sees cursor-arrive → press → result in the correct order.
 async function pressEffect(page, box) {
-  const x = (box.x + box.width / 2) / scale;
-  const y = (box.y + box.height / 2) / scale;
+  const x = (box.x + box.width / 2) / zoom;
+  const y = (box.y + box.height / 2) / zoom;
   await page.evaluate(([cx, cy, ac]) => {
     const c = document.getElementById('__wtv_cursor');
     if (c) {
@@ -223,7 +228,7 @@ async function showHighlight(page, loc) {
   const box = await bbox(page, loc);
   if (!box) return;
   // overlay lives inside the zoomed document → divide by scale
-  const [hx, hy, hw, hh] = [box.x / scale, box.y / scale, box.width / scale, box.height / scale];
+  const [hx, hy, hw, hh] = [box.x / zoom, box.y / zoom, box.width / zoom, box.height / zoom];
   await page.screencast.showOverlay(
     `<div style="position:fixed;left:${hx - 6}px;top:${hy - 6}px;` +
     `width:${hw + 12}px;height:${hh + 12}px;` +
@@ -397,7 +402,7 @@ async function bbox(page, loc) {
     return { x: q.x, y: q.y, width: q.width, height: q.height };
   }).catch(() => null);
   if (!fb || !r) return null;
-  return { x: fb.x + r.x * scale, y: fb.y + r.y * scale, width: r.width * scale, height: r.height * scale };
+  return { x: fb.x + r.x * zoom, y: fb.y + r.y * zoom, width: r.width * zoom, height: r.height * zoom };
 }
 
 async function runAction(page, a) {
@@ -417,6 +422,7 @@ async function runAction(page, a) {
       await ensureUnclipped(page, loc);
       await ensureCentered(page, loc);
       await ensureOnScreen(page, loc);
+      await settledBox(page, loc);
       if (a.highlight) await showHighlight(page, loc);
       // Coordinate input, never loc.click(): Playwright's actionability loop
       // re-fires its own instant scrollIntoView on every retry, which fights
@@ -491,6 +497,7 @@ async function runAction(page, a) {
       await ensureUnclipped(page, loc);
       await ensureCentered(page, loc);
       await ensureOnScreen(page, loc);
+      await settledBox(page, loc); // a long smooth scroll outlasts the fixed waits
       const box = await glideCursorTo(page, loc);
       if (box) {
         await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
@@ -516,6 +523,7 @@ async function runAction(page, a) {
         el.scrollIntoView({ behavior: 'smooth', block: 'center' })).catch(() => {});
       await sleep(600);
       await ensureOnScreen(page, loc);
+      await settledBox(page, loc);
       break;
     }
     case 'eval': {
@@ -563,9 +571,12 @@ const context = await browser.newContext({
   viewport: { width: width * scale, height: height * scale },
   ignoreHTTPSErrors: cfg.ignore_https_errors !== false,
 });
-if (scale !== 1) {
+if (zoom !== 1) {
+  // Top document only: an iframe (the block editor canvas) already scales with
+  // its parent, so zooming it too renders its text at zoom² (the "huge font").
   await context.addInitScript(`(() => {
-    const apply = () => { document.documentElement.style.zoom = '${scale}'; };
+    if (window !== window.top) return;
+    const apply = () => { document.documentElement.style.zoom = '${zoom}'; };
     document.addEventListener('DOMContentLoaded', apply);
     apply();
   })()`);

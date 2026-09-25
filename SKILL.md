@@ -82,6 +82,7 @@ Create the run directory `runs/<slug>-<hash>/` and write `config.json`:
   "ignore_https_errors": true,               // self-signed local sites (Local, Laravel Valet…)
   "action_timeout_ms": 10000,                // fail-fast selector waits
   "capture_scale": 1,                        // 1 = native layout (safe); 2 = 4K master via CSS zoom — see caveat below
+  "ui_zoom": null,                           // document zoom; default = capture_scale. 1.5 with capture_scale 2 lays the page out at 2560x1440 (UI at 75%) so content + panel both fit
   "browser_channel": null,                   // null = bundled Playwright Chromium; "chrome" = installed Google Chrome (own temp profile)
   "dismiss_notices": true,                   // remove .notice/.update-nag before recording
   "allow_destructive": false,                // guard scenes clicking delete/deactivate/…
@@ -280,6 +281,13 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
 - **bootstrap creates an x86_64 venv on Apple Silicon** (Intel Homebrew under
   Rosetta) → PyTorch has no macOS x86_64 wheels; bootstrap pins an arm64
   CPython and verifies the venv arch, failing loudly instead of silently.
+- **Text inside an iframe (the block editor canvas) renders huge under
+  `capture_scale: 2`** → the zoom was being applied inside the iframe as well as
+  to the page (zoom²). Fixed: the recorder zooms the top document only. If it
+  ever recurs, check nothing else sets `zoom` on the canvas document.
+- **The screen feels cramped at 2x (only a few lines of content visible)** →
+  set `ui_zoom` below `capture_scale` (1.5 → 75% UI) so more of the page fits
+  the 4K frame; the delivery stays 3840×2160.
 - **A modal/dialog outgrows the viewport under `capture_scale: 2`** (its header
   is cut off at the top, its footer buttons sit below the fold and clicks on
   them miss) → the window is sized with viewport units, which the CSS-zoom
