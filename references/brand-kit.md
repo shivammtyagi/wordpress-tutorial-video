@@ -91,7 +91,6 @@ An end card is optional. Set `outro_seconds: 0` (or `"outro": false`) in the
 run's `config.json` and delete `assets/card_outro.html`; the video then ends on
 the last scene's final frame. Do this whenever the brand has no approved
 end-card design — a broken or off-brand end card is worse than none.
-(AIOSEO production videos: **no end card**, per the channel owner, 2026-09-24.)
 
 ## 5. Thumbnail & end card via Claude Design (optional, after delivery)
 

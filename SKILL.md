@@ -60,7 +60,7 @@ Create the run directory `runs/<slug>-<hash>/` and write `config.json`:
   "tts_target_wpm": 185,                     // pace ceiling; regenerate then atempo-stretch to hit it
   "tts_max_attempts": 2,                     // regenerations before the pitch-safe stretch
   "tts_voice_prompt": null,                  // optional reference WAV to clone (get consent!)
-  "tts_spoken": {},                          // chatterbox respellings for coinages, e.g. {"TruSEO": "True SEO"} (captions keep the spelling)
+  "tts_spoken": {},                          // chatterbox respellings for brand coinages, e.g. {"WooCommerce": "Woo Commerce"} (captions keep the spelling)
   "voice": "af_heart",                       // kokoro voice
   "speed": 1.0,                              // kokoro speaking speed (0.95 with natural pacing; 1.0 otherwise)
   "tts_sentence_gap_s": 0.65,                // kokoro natural pacing: pause between sentences (omit = off)
@@ -306,7 +306,8 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
   coordinates but writes CSS px. Add a recorded-phase `eval` right after the
   `wait` for it that pins it beside its trigger: set `position: fixed`,
   `transform: none`, and `top`/`left` from the trigger's rect divided by the
-  document zoom, all `!important`. See the keywords run's Slug scene.
+  document zoom, all `!important`. Example: the block editor's Slug popover in
+  the Post panel.
 - **Dropdown menus render collapsed/truncated on camera** → you are recording
   with `capture_scale: 2`. The 4K master works by CSS-zooming the document,
   and JS-positioned dropdowns (vue-multiselect etc.) mis-measure under zoom.

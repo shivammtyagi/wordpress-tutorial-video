@@ -597,8 +597,8 @@ await context.addInitScript(`(() => {
       'margin-left:-5px;margin-top:-5px;' +  // NSCursor.arrow hotspot (5,5)
       'z-index:2147483647;pointer-events:none;' +
       'transition:left .55s cubic-bezier(.25,.1,.25,1),top .55s cubic-bezier(.25,.1,.25,1);';
-    // DOM APIs, not innerHTML: pages with a Trusted Types CSP (AIOSEO's
-    // settings app, for one) reject innerHTML and the cursor would vanish.
+    // DOM APIs, not innerHTML: pages with a Trusted Types CSP (some plugin
+    // admin apps) reject innerHTML and the cursor would vanish.
     const img = document.createElement('img');
     img.src = 'data:image/png;base64,${CURSOR_PNG_B64}';
     img.alt = '';

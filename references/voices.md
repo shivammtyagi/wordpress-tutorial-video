@@ -2,8 +2,8 @@
 
 Engine choice is the user's call per channel: Kokoro (deterministic, clean,
 natural-pacing mode below) or Chatterbox (expressive prosody, stochastic).
-AIOSEO production videos use **Kokoro `af_heart` in natural pacing mode**
-(chosen 2026-09-24 for its even flow and controllable pauses).
+Channels that want an even, controllable delivery tend to pick Kokoro's
+natural-pacing mode; channels that want more expressive reads pick Chatterbox.
 
 ## Default: Kokoro-82M
 
@@ -70,8 +70,9 @@ Per-scene rate: a scene may carry `"tts_speed": 0.88` to slow just that scene
 
 ### Pronunciation control (the audio-gate insurance)
 
-1. **Lexicon** — `references/lexicon.json` maps product terms to IPA; add
-   per-run terms via the `lexicon` key in `config.json`. Terms are injected as
+1. **Lexicon** — `references/lexicon.json` ships generic WordPress terms; add
+   your brand's product names via the `lexicon` key in `config.json` (probe each
+   entry: synthesize + transcribe before relying on it). Terms are injected as
    Kokoro inline links: `[AIOSEO](/ˌeɪˌaɪˌoʊˌɛsˌiˈoʊ/)`.
 2. **Automatic normalization** (`scripts/lib/normalize.py`): URLs are spoken
    ("aioseo dot com slash docs"), versions expanded ("version five point nine
