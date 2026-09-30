@@ -13,7 +13,7 @@ auto-fixes the scenes that don't, and hands you the final video.
 Works for **any** WordPress plugin, theme, or admin feature. The only assumption is
 that the target is WordPress.
 
-> **Status:** macOS only (Apple Silicon recommended). Free and open source (MIT).
+> **Status:** macOS only (Apple Silicon recommended). Free to use.
 > No paid dependencies.
 
 ## How it works
@@ -40,7 +40,7 @@ A frame from a fully machine-generated and machine-verified pilot video (AIOSEO'
 XML Sitemaps doc, recorded on a local WordPress site — note the glide cursor
 resting on the toggle the narration is describing):
 
-![Sample tutorial frame](docs/images/sample-scene.png)
+![Sample tutorial frame](https://raw.githubusercontent.com/shivammtyagi/wordpress-tutorial-video/main/docs/images/sample-scene.png)
 
 The finished MP4 ships with narration at −16 LUFS, aligned soft captions built
 from the script text, embedded chapter markers (one per scene), and a
@@ -115,7 +115,7 @@ transcript diff), captions, and chapters are local and free.
 | Layer | Tool |
 |-------|------|
 | Parse & script | Claude Code |
-| Voiceover | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0) + espeak-ng; Chatterbox (MIT) optional |
+| Voiceover | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) + espeak-ng; Chatterbox optional |
 | Audio gate & alignment | [WhisperX](https://github.com/m-bain/whisperX) (faster-whisper fallback) |
 | Record | Playwright `page.screencast` (≥ 1.59), 2x device-scale master |
 | Compose | FFmpeg (single-encode pipeline, loudness-normalized, MP4 chapters) |
@@ -135,7 +135,3 @@ node tests/test_record_scene.mjs   # recorder against a static fixture (no WordP
 
 CI runs both on macOS for every push/PR (`.github/workflows/ci.yml`). TTS and
 transcription have `--engine stub` modes so the suite needs no ML downloads.
-
-## License
-
-MIT — see [LICENSE](LICENSE).
