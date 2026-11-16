@@ -84,6 +84,35 @@ export WP_ADMIN_PASS="…"
 The skill creates `runs/<slug>/`, runs the pipeline step by step, and writes the
 result to `runs/<slug>/output/final.mp4`.
 
+## Premium narration (optional)
+
+The local voices are free and need nothing extra. For the most natural read,
+the skill can voice the video with ElevenLabs instead:
+
+```bash
+export ELEVENLABS_API_KEY=...   # in your shell profile; the skill never stores it
+```
+
+Then tell Claude you want **Premium narration**. It lists the voices on your
+account, records a short audition of a few so you can pick by ear, shows what
+the video will bill before spending anything (about one character per
+character of narration — roughly 2,000–2,500 for a 3-minute tutorial), and
+voices each scene in one natural take. What you get on top of the voice:
+
+- **Deliberate pauses.** The pause after every sentence and paragraph is
+  lengthened to your channel's pacing, on the audio itself, so the read stays
+  natural.
+- **Product names said right, and checked.** Respellings pin coined names
+  (`"TruSEO": "True SEO"`), and the audio gate re-listens to each one without
+  hints, because a mispronounced name otherwise slips through.
+- **Exact timing.** Clicks and captions use the service's own per-word
+  timestamps.
+- **No surprise bills.** Takes are cached per scene: re-runs and pacing or
+  speed changes are free, and a one-scene fix bills one scene.
+
+Only the narration text is sent to ElevenLabs; the recording and your site
+stay on your Mac. Details: [references/voices.md](references/voices.md).
+
 ## Configuration
 
 See `config.json` in [SKILL.md](SKILL.md#inputs--configjson). Key knobs:
@@ -93,6 +122,9 @@ See `config.json` in [SKILL.md](SKILL.md#inputs--configjson). Key knobs:
 | `resolution` / `fps` | `1920x1080` / `30` | Delivery resolution, 16:9. |
 | `capture_scale` | `2` | Records a 2x (4K) master for crisp text; `deliver_4k: true` also outputs full 4K. |
 | `voice` / `speed` | `af_heart` / `0.9` | Kokoro voice + pace (see [references/voices.md](references/voices.md)). |
+| `engine` | `chatterbox` | `chatterbox` / `kokoro` run locally and are free; `elevenlabs` is the premium voice (needs `ELEVENLABS_API_KEY`). |
+| `elevenlabs_voice` / `elevenlabs_model` | `Eric` / `eleven_v4` | Premium narrator and model. Pick the voice by ear with `tts_elevenlabs.py --audition`. |
+| `tts_spoken` | `{}` | Respellings for product names (`{"TruSEO": "True SEO"}`). Captions keep the real spelling; the audio gate checks the name is heard correctly. |
 | `lexicon` | `{}` | Pronunciation overrides (term → IPA) merged with [references/lexicon.json](references/lexicon.json). |
 | `chapter_cards` | `false` | Per-scene blur cards off; scene intents become MP4 chapter markers. |
 | `transitions` | `"none"` | `"fade"` enables crossfades (re-encode). |
@@ -115,7 +147,7 @@ transcript diff), captions, and chapters are local and free.
 | Layer | Tool |
 |-------|------|
 | Parse & script | Claude Code |
-| Voiceover | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) + espeak-ng; Chatterbox optional |
+| Voiceover | [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) + espeak-ng, or Chatterbox — local and free. Premium option: [ElevenLabs](https://elevenlabs.io) (Eleven v4) with your own API key |
 | Audio gate & alignment | [WhisperX](https://github.com/m-bain/whisperX) (faster-whisper fallback) |
 | Record | Playwright `page.screencast` (≥ 1.59), 2x device-scale master |
 | Compose | FFmpeg (single-encode pipeline, loudness-normalized, MP4 chapters) |
@@ -124,7 +156,8 @@ transcript diff), captions, and chapters are local and free.
 ## Limitations
 
 macOS only · WordPress admin only · needs a user-provided configured site ·
-verification consumes credits (tunable) · Kokoro is English-leaning.
+verification consumes credits (tunable) · Kokoro is English-leaning · premium
+narration needs your own ElevenLabs plan and bills per character.
 
 ## Development
 

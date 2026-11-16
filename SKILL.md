@@ -39,6 +39,10 @@ long take edited down.
   never provisions one.
 - Admin credentials are read from environment variables named in `config.json`
   (`wp_user_env`, `wp_pass_env`) — never hard-code them.
+- **Optional — premium narration:** an ElevenLabs API key in the
+  `ELEVENLABS_API_KEY` environment variable unlocks the ElevenLabs engine
+  (`engine: "elevenlabs"`). Nothing to install for it; the local voices stay
+  free and need no key. See "Narration — Standard or Premium" below.
 
 ## Inputs — config.json
 
@@ -53,21 +57,29 @@ Create the run directory `runs/<slug>-<hash>/` and write `config.json`:
   "resolution": "1920x1080",                 // delivery resolution
   "deliver_4k": false,                       // also write clips/output at master resolution
   "fps": 30,
-  "engine": "chatterbox",                    // chatterbox (default, natural prosody) | kokoro (fast fallback)
+  "engine": "chatterbox",                    // chatterbox (default, natural prosody) | kokoro (fast fallback) | elevenlabs (premium, needs an API key)
   "tts_exaggeration": 0.4,                   // chatterbox: emotion intensity 0..1
   "tts_cfg": 0.35,                           // chatterbox: generation-guidance weight
   "tts_gap_s": 0.30,                         // chatterbox: pause between sentences
   "tts_target_wpm": 185,                     // pace ceiling; regenerate then atempo-stretch to hit it
   "tts_max_attempts": 2,                     // regenerations before the pitch-safe stretch
   "tts_voice_prompt": null,                  // optional reference WAV to clone (get consent!)
-  "tts_spoken": {},                          // chatterbox respellings for brand coinages, e.g. {"WooCommerce": "Woo Commerce"} (captions keep the spelling)
+  "tts_spoken": {},                          // chatterbox + elevenlabs: respellings for brand coinages, e.g. {"TruSEO": "True SEO"} (captions keep the spelling; the audio gate checks the name is heard that way)
+  "pronunciation_checks": {},                // extra accepted hearings for the gate's unbiased listen, e.g. {"AIOSEO": ["A I O SEO"]}
   "voice": "af_heart",                       // kokoro voice
   "speed": 1.0,                              // kokoro speaking speed (0.95 with natural pacing; 1.0 otherwise)
   "tts_sentence_gap_s": 0.65,                // kokoro natural pacing: pause between sentences (omit = off)
   "tts_paragraph_gap_s": 1.0,                // kokoro natural pacing: pause at a "\n" in the narration
   "tts_min_words": 5,                        // kokoro natural pacing: merge shorter sentences into a neighbour
   "tts_lead_s": 0.35, "tts_tail_s": 0.5,     // kokoro natural pacing: room before/after the narration
-  "lexicon": {},                             // kokoro pronunciation overrides (term → IPA)
+  "lexicon": {},                             // kokoro pronunciation overrides (term → IPA); also sent as /IPA/ to ElevenLabs v4
+  "elevenlabs_voice": "Eric",                // elevenlabs: voice name (as listed by --list-voices) or 20-char voice id
+  "elevenlabs_model": "eleven_v4",           // elevenlabs: eleven_v4 (best narration) | eleven_multilingual_v2 | eleven_flash_v2_5 (half price)
+  "elevenlabs_key_env": "ELEVENLABS_API_KEY",// elevenlabs: NAME of the env var holding the key — never the key itself
+  "elevenlabs_speed": 1.0,                   // elevenlabs: speaking rate 0.7–1.2 (per-scene: tts_speed)
+  "elevenlabs_stability": null,              // elevenlabs: 0..1, higher = more even delivery (null = the voice's default)
+  "elevenlabs_context": true,                // elevenlabs: send neighbouring scenes as context so intonation carries across scenes
+  "tts_max_pause_s": 1.6,                    // elevenlabs: cap for a pause the model made too long
   "asr_model": "small.en",                   // audio-gate WhisperX model ("large-v3-turbo" = max accuracy)
   "accent_color": "#2271b1",                 // highlight rings + click ripples (use the brand color)
   "chapter_cards": false,                    // 2s blurred card per scene (off: MP4 chapters instead)
@@ -112,6 +124,38 @@ Before creating the run, ask the user:
 - Without: the default card template and WP-admin-blue accents are used; write
   the narration in the generic house style (also in `brand-kit.md`).
 
+## Narration — Standard or Premium (ask with the brand kit)
+
+Ask once, up front: **"Standard narration (free, runs on this Mac) or Premium
+(ElevenLabs — the most natural voice; needs an ElevenLabs API key and bills
+about one character per character of narration)?"** Default to Standard when
+the user has no key or no preference.
+
+- **Standard** — `engine: "chatterbox"` or `"kokoro"`, as before.
+- **Premium** — `engine: "elevenlabs"`, voiced by `scripts/tts_elevenlabs.py`
+  (any `python3`; nothing to install). Before the first Premium video:
+  1. The key must be in the environment (`export ELEVENLABS_API_KEY=…` in the
+     user's shell profile). Never write it into `config.json`, the run
+     directory, a script, or a message. If it is missing, say how to set it and
+     offer Standard meanwhile.
+  2. **Let the user choose the voice by ear.** `tts_elevenlabs.py --list-voices`,
+     pick 3–5 that fit a tutorial (clear, unhurried), then
+     `--audition "<two real sentences from the script, with the product names>"
+     --voices "A,B,C" --out <folder>` and hand them the folder. A short audition
+     bills a few hundred characters. Save the choice as `elevenlabs_voice`.
+  3. **Pin every product name.** Ask how each coined name is said and set
+     `tts_spoken` (`{"TruSEO": "True SEO"}`). Premium voices read invented names
+     differently from take to take — the same voice said "TruSEO" correctly in
+     one request and "TruCO" in the next — so a respelling is required, not
+     optional. The audio gate then checks each name with an unbiased listen.
+  4. `--estimate` prints what a run will bill before anything is spent; tell
+     the user the number for long videos. Takes are cached per scene, so
+     re-runs, pause changes and speed changes are free, and a one-scene fix
+     bills one scene.
+
+Full reference (models, pauses, speed, costs, plans): `references/voices.md` →
+"Premium: ElevenLabs".
+
 ## Prepare the environment — before any recording
 
 Never demo on whatever test content happens to exist. Before step 6, create
@@ -139,9 +183,9 @@ with `--force` to redo it.
 | 2 | Fetch & parse the doc | `python3 scripts/fetch_doc.py --run-dir <d>` | — |
 | 3 | Write `script.json` | **you** — see below | `scene-schema.md` |
 | 4 | Self-review the script | **you** — clarity, pacing, 4–12 scenes, and the screen sequence: no screen revisited, state carried forward within a screen | `scene-schema.md` |
-| 5 | Voiceover + durations | `tts_chatterbox.py --run-dir <d>` (.venv-cbx; default) or `tts_kokoro.py` (.venv; fallback) | `voices.md` |
-| 5a | Trim silences + compress pauses | `trim_audio.py --run-dir <d>` (venv) — run BEFORE the gate. **Skip** in Kokoro natural pacing mode (its pauses are deliberate; edges are pre-trimmed) | `voices.md` |
-| 5b | **Audio gate** — per-scene WER + word offsets | `verify_scenes.py --run-dir <d>` (venv); on failure regenerate that scene's audio (engine script `--force --scene-id NN`), re-trim, and re-run `verify_scenes.py --scene-id NN`, at most `max_fix_iterations` times | `verification.md` |
+| 5 | Voiceover + durations | `tts_chatterbox.py --run-dir <d>` (.venv-cbx; default) or `tts_kokoro.py` (.venv; fallback) or, for Premium, `python3 scripts/tts_elevenlabs.py --run-dir <d>` (run `--estimate` first) | `voices.md` |
+| 5a | Trim silences + compress pauses | `trim_audio.py --run-dir <d>` (venv) — run BEFORE the gate. **Skip** in Kokoro natural pacing mode and for ElevenLabs (their pauses are deliberate; edges are pre-trimmed) | `voices.md` |
+| 5b | **Audio gate** — per-scene WER, product-name pronunciation, word offsets | `verify_scenes.py --run-dir <d>` (venv); on failure regenerate that scene's audio (engine script `--force --scene-id NN`), re-trim, and re-run `verify_scenes.py --scene-id NN`, at most `max_fix_iterations` times | `verification.md` |
 | 6 | Discover selectors + plan phases/cues | **you** — explore the live site | `selector-discovery.md` |
 | 7 | Record each scene | `node scripts/record_scene.mjs --run-dir <d> --scene-id NN --base-url <site>`; scenes whose start state is the *result* of the previous scene (an AI run, a wizard) record as a chain: `--scene-ids 06,07,08` (see `scene-schema.md` → Chained scenes) | `recording-tuning.md` |
 | 8 | Post-process each clip | `postprocess_clip.py --run-dir <d> --scene-id NN [--zoom]` | `ffmpeg-recipes.md` |
@@ -186,7 +230,9 @@ Read `doc.md`. Produce `script.json` per `references/scene-schema.md`:
   pause mid-thought ("a short, inviting summary" reads as a stall — drop the
   comma in the narration text); **never write a question** — Kokoro reads a
   question mark flat, so use the conditional statement instead ("If you want
-  to revert, then click Revert." not "Want to revert?").
+  to revert, then click Revert." not "Want to revert?"). (ElevenLabs does
+  voice questions naturally; keep to statements anyway unless the channel's
+  style calls for them, so a script works on every engine.)
 - `intent`: the scene's plain-language goal (becomes the MP4 chapter title).
 - `actions`: ordered steps with **human-language `target`s** and `selector: null`
   (discovery fills selectors). Types: `goto`, `click`, `type`, `press` (key or
@@ -219,6 +265,21 @@ writes per-scene word offsets that power recorder cues and captions. If a scene
 fails the WER threshold, regenerate just that scene's audio and re-check —
 **before** any recording time is spent. See `references/verification.md`.
 
+Two further things happen in the same pass:
+
+- **Product-name pronunciation.** The transcription above is deliberately
+  biased toward product names, which also makes it deaf to a mispronounced
+  one ("trusio" is written down as "TruSEO"). For every name in `tts_spoken` /
+  `pronunciation_checks`, scenes that contain it get a second, unbiased listen
+  and fail with `pronunciation FAIL (<name>) — heard: …` when the name is not
+  heard as an accepted form. Fix: regenerate the scene; if it persists, change
+  the respelling. Only add an accepted hearing to `pronunciation_checks` when
+  the user has listened and confirmed the take is right.
+- **Exact word timings.** When the engine supplied its own per-word timings
+  (`audio/words/NN.json` — ElevenLabs does), those drive recorder cues and
+  captions (`timing=engine` in the log) after a sanity comparison against the
+  transcription.
+
 ### Steps 10–11 — verify & auto-fix (your job)
 
 Text fidelity was already verified at step 5b. Here: run
@@ -233,7 +294,8 @@ failing.
 
 1080p delivery, native capture (`capture_scale: 1`) · 30fps · 16:9 · captions
 on (soft `mov_text` track, phrase-aware cues from script text + alignments) ·
-Chatterbox narration paced to ≤185 wpm, silence-trimmed · hard cuts with ONE
+Chatterbox narration paced to ≤185 wpm, silence-trimmed (Premium: ElevenLabs
+`eleven_v4`, whole-scene reads with shaped pauses) · hard cuts with ONE
 eased dissolve after the intro card (`transitions: "intro"`); audio is never
 crossfaded · genuine macOS cursor with press ripple at the true click instant ·
 click sounds mixed at recorded event times · scene tails capped at 0.4s
@@ -249,6 +311,11 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
   scenes whose on-camera click matches delete/remove/trash/deactivate/uninstall/
   reset unless `allow_destructive: true`. Surface flagged scenes to the user —
   do not enable the flag yourself.
+- **API keys stay in the environment.** The ElevenLabs key is read from the
+  env var named by `elevenlabs_key_env`; never write it to `config.json`, a
+  script, the run directory, a commit, or a chat message, and never echo it.
+  Premium narration sends the narration text (not the screen recording) to
+  ElevenLabs — use a local engine for text that must stay on the machine.
 - **Record against a staging or local site**, never production. Use
   `redact_selectors` / `redact_patterns` to blur emails or license keys that
   appear in the admin.
@@ -264,7 +331,10 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
 - **Recorder times out on a selector** → the scene probably assumes state from a
   previous scene. Each scene records fresh; add setup-phase navigation.
 - **`login failed — landed on <url>`** → confirm the env vars in `config.json`
-  hold valid admin creds and the user has admin access.
+  hold valid admin creds and the user has admin access. (WordPress's
+  six-monthly "confirm your admin email" screen is handled: the recorder
+  clicks "Remind me later" and logs `postponing the "confirm admin email"
+  screen`.)
 - **`session expired (redirected to wp-login.php)`** → long run; just re-run the
   scene — the recorder logs in fresh each time.
 - **`PHP error rendered on page`** → the site itself is broken on that screen;
@@ -274,6 +344,22 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
   `check_env.sh --deep` to confirm which path is active.
 - **Audio gate keeps failing on a product name** → add the term to
   `references/lexicon.json` or the run's `lexicon` config (term → IPA).
+- **`pronunciation FAIL (<name>) — heard: …`** → the voice mispronounced a
+  product name on that take. Regenerate the scene (`--force --scene-id NN`);
+  if it fails again, change the `tts_spoken` respelling (spell acronym letters
+  apart: "True S E O"). The transcript after "heard:" shows what came out.
+- **`tts_elevenlabs: no API key`** → the env var named by `elevenlabs_key_env`
+  is not set in the shell that runs the script. The user sets it in their
+  shell profile; do not put the key in a file yourself. Offer Standard
+  narration meanwhile.
+- **`ElevenLabs quota exhausted`** → the plan's characters are used up. Scenes
+  already voiced are cached; either the user tops up, or finish the rest with
+  a local engine (mixed voices in one video are a last resort — say so).
+- **`pcm_48000 is not available on this plan — using pcm_24000`** →
+  informational; the audio is still clean, and compose resamples it.
+- **`the API key lacks a permission`** → a restricted key needs the Text to
+  Speech permission, and Voices (read) to look a voice up by name. With a
+  speech-only key, set `elevenlabs_voice` to the 20-character voice id.
 
 - **Chatterbox venv fails with `PerthImplicitWatermarker` / `pkg_resources` errors**
   → the venv needs `setuptools<81` (bootstrap pins it); newer setuptools removed
@@ -341,4 +427,6 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
 macOS only · WordPress admin only · requires a user-provided configured site ·
 verification (vision check) consumes credits — tune with `verify` / `verify_sample`
 / `max_fix_iterations` · Kokoro is English-leaning; for branded/cloned voices see
-`references/voices.md`.
+`references/voices.md` · Premium narration needs the user's own ElevenLabs
+plan (check that its licence covers how the video will be published — the free
+tier is not for commercial use) and bills per character.

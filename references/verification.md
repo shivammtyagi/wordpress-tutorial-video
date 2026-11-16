@@ -22,8 +22,36 @@ For every scene WAV:
    single-letter runs ("U R L" == "URL") — so "5" vs "five" or case differences
    never count as errors.
 3. Compute per-scene WER. `WER > wer_threshold` (default 0.15) fails the scene.
-4. Write `verify/scenes/NN.json` (`{words, wer, ok}` — word offsets feed recorder
-   cues and captions) and `verify/audio_report.json`; exit 1 if any scene failed.
+4. **Product-name pronunciation — the unbiased listen.** Step 1's glossary is
+   what keeps the WER honest for technical words, and it is also why WER
+   cannot catch a mispronounced product name: the recognizer hears "trusio",
+   is told "TruSEO" is likely, and writes "TruSEO". So for every name with a
+   known correct hearing — keys of `tts_spoken` (the respelling is the
+   expected hearing) and `pronunciation_checks` (`{"AIOSEO": ["A I O SEO"]}`)
+   — each scene containing the name is transcribed a second time with **no
+   glossary**, and the name must be heard as an accepted form as many times as
+   it is written. Comparison ignores case, spaces and punctuation
+   ("true SEO" = "True-SEO" = "TrueSEO"). A miss fails the scene and prints
+   `pronunciation FAIL (TruSEO) — heard: …`; the full unbiased transcript is
+   saved as `heard_unbiased`. Names that only have a `lexicon` (IPA) entry are
+   not checked, so existing runs behave as before.
+5. **Word timings.** If the engine wrote `audio/words/NN.json` for this exact
+   audio (the ElevenLabs path does — timings straight from the service's
+   character alignment, in the script's spelling), those become `words`
+   (`"timing": "engine"`) and the transcribed words are kept as `asr_words`.
+   They are used only when they agree with the transcription (median start
+   difference ≤ 0.4 s over at least half the words); otherwise the transcribed
+   timings are used and a warning is printed.
+6. Write `verify/scenes/NN.json` (`{words, wer, ok, timing[, pronunciation,
+   heard_unbiased, asr_words]}` — word offsets feed recorder cues and
+   captions) and `verify/audio_report.json`; exit 1 if any scene failed.
+
+**On a pronunciation failure:** regenerate the scene (`--force --scene-id NN`
+on the engine script — on ElevenLabs this bills one scene). If the same name
+fails twice, change its `tts_spoken` respelling (spell the letters of an
+acronym apart) rather than retrying. Do not "fix" a failure by adding the
+misheard form to `pronunciation_checks` — add a hearing there only after the
+user has listened to the take and confirmed it is right.
 
 **On failure:** regenerate that scene's audio (`tts_kokoro.py --force`, or fix
 the narration/lexicon if the word is genuinely unpronounceable) and re-run

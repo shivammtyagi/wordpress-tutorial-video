@@ -1,9 +1,131 @@
 # Voices & narration audio
 
-Engine choice is the user's call per channel: Kokoro (deterministic, clean,
-natural-pacing mode below) or Chatterbox (expressive prosody, stochastic).
+Engine choice is the user's call per channel:
+
+| Tier | Engine | Runs | Cost | Character |
+|------|--------|------|------|-----------|
+| Standard | Kokoro (`tts_kokoro.py`) | on this Mac | free | deterministic, clean, even; natural-pacing mode below |
+| Standard | Chatterbox (`tts_chatterbox.py`) | on this Mac | free | expressive prosody, stochastic |
+| Premium | ElevenLabs (`tts_elevenlabs.py`) | ElevenLabs API | per character, user's own plan | the most natural read; studio voices; exact word timings |
+
 Channels that want an even, controllable delivery tend to pick Kokoro's
-natural-pacing mode; channels that want more expressive reads pick Chatterbox.
+natural-pacing mode; channels that want more expressive reads pick Chatterbox;
+channels that want the best-sounding result and have an ElevenLabs plan pick
+Premium. All three write the same files, so everything after step 5 is
+identical.
+
+## Premium: ElevenLabs
+
+`scripts/tts_elevenlabs.py` — standard-library Python plus ffmpeg, so it runs
+with any `python3` and needs no model download. Set `engine: "elevenlabs"` in
+`config.json` and put the key in the environment:
+
+    export ELEVENLABS_API_KEY=…        # in the user's shell profile, never in a file of the run
+
+A restricted key needs **Text to Speech** access, plus **Voices (read)** to
+resolve a voice by name.
+
+### How a scene is voiced
+
+1. The whole scene goes to the API in **one request** (`/with-timestamps`), so
+   the read flows across sentences the way a person would say it. The previous
+   and next scenes' narration ride along as context (`previous_text` /
+   `next_text`) so intonation carries across cuts (`elevenlabs_context: false`
+   turns that off).
+2. The response carries the audio and a **per-character alignment**. From it
+   the script derives exact per-word timings in the script's own spelling
+   (`audio/words/NN.json`) — recorder cues and captions use them directly.
+3. **Pauses are shaped on the audio, not in the text.** Eleven v4 has no pause
+   tag, and splitting the text into sentences would flatten the prosody.
+   Instead the silence at every sentence and paragraph boundary is measured
+   and lengthened to a minimum; pauses the voice made longer are kept (up to
+   `tts_max_pause_s`); commas and other natural pauses are never touched.
+
+```jsonc
+"tts_sentence_gap_s": 0.65,   // minimum pause between sentences (default 0.5)
+"tts_paragraph_gap_s": 1.0,   // minimum pause at a "\n" in the narration (default 0.85)
+"tts_min_words": 5,           // a boundary next to a shorter sentence keeps its natural pause
+"tts_lead_s": 0.35,           // room before the first word
+"tts_tail_s": 0.5,            // room after the last word
+"tts_max_pause_s": 1.6        // cap for an over-long pause
+```
+
+These are the same keys Kokoro's natural pacing uses, with the same meaning,
+so a channel's pacing carries over when it switches engine. A value of `0`
+leaves that kind of boundary alone. **Do not run `trim_audio.py`** on this
+output.
+
+### Models
+
+| `elevenlabs_model` | Use | Bills |
+|--------------------|-----|-------|
+| `eleven_v4` (default) | ElevenLabs' highest-quality narration model | 1 per character |
+| `eleven_multilingual_v2` | very stable long-form; honours `speed` natively | 1 per character |
+| `eleven_flash_v2_5` | drafts and bulk; noticeably plainer | 0.5 per character |
+
+Measured behaviour worth knowing (November 2026):
+
+- **v4 ignores `voice_settings.speed`** (the request succeeds, the audio does
+  not change). `elevenlabs_speed` and a scene's `tts_speed` are therefore
+  applied locally on v4/v3 with a pitch-preserving `atempo` stretch, and sent
+  natively to the other models. Keep within 0.85–1.1.
+- **v4 has no SSML / `<break>` tags** — hence the pause shaping above.
+- **v4 reads inline IPA** written between slashes. A run-config `lexicon`
+  entry is sent that way on v4 (`/tɹuˌɛsˌiˈoʊ/`); other models ignore IPA, so
+  prefer `tts_spoken` respellings, which work everywhere.
+- Output is `pcm_48000` (falls back to `pcm_24000` when the plan refuses it;
+  44.1 kHz PCM needs the Pro tier, 48 kHz does not).
+
+### Choosing a voice
+
+    python3 scripts/tts_elevenlabs.py --list-voices
+    python3 scripts/tts_elevenlabs.py --audition "Two real sentences from the script." \
+        --voices "Eric,Sarah,Matilda" --out ~/Desktop/voice-auditions
+
+Audition with real script lines that contain the product names, and let the
+user pick by ear — do not pick for them from a transcript. Voices labelled
+`informative_educational` or `conversational` with an American accent suit
+tutorials (Eric, Sarah, Matilda, Chris, Bella among the stock voices). Set
+`elevenlabs_voice` to the name before " - " or to the voice id.
+
+### Product names — respell them, always
+
+Premium voices do not pronounce a coined name the same way twice. In testing,
+"TruSEO" came out right in one request and as "TruCO" in the next **with the
+same voice**, and three of five stock voices said it wrong on the first try.
+A respelling fixed it on every voice and take tested:
+
+```jsonc
+"tts_spoken": { "TruSEO": "True SEO", "AIOSEO": "A I O SEO" }
+```
+
+The respelling is what gets sent; captions, cue matching and the word timings
+keep the script's spelling. The audio gate then verifies each name with an
+unbiased listen (see `verification.md`) — the ordinary WER pass cannot catch
+this, because its glossary writes down the right spelling for a wrong sound.
+
+### Cost, caching, retakes
+
+- Billing is per character of narration: a 3-minute tutorial is roughly
+  2,000–2,500 characters; a 6-minute one about 5,000.
+- `--estimate` prints the characters a run would bill, without calling the
+  speech endpoint. `audio/elevenlabs_usage.json` keeps the running total for
+  the video.
+- The raw take of every scene is cached by (model, voice, settings, text).
+  Re-running, changing any pause setting, or changing speed on v4 re-shapes
+  the cached take **for free**. Editing a scene's narration bills that scene
+  only; its neighbours are not re-voiced even though they were its context.
+- `--force --scene-id NN` discards the cached take and bills a new one — the
+  retake path when the gate rejects a scene.
+- Plans: the free tier's characters are enough to try one short video but its
+  licence is non-commercial; published videos need a paid plan. The key's
+  owner should confirm the plan before production use.
+
+### What stays on the machine
+
+Only narration text is sent to ElevenLabs. The screen recording, the site, and
+the credentials never leave the Mac. For text that must not leave the machine,
+use a Standard engine.
 
 ## Default: Kokoro-82M
 

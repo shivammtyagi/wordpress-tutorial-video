@@ -136,6 +136,12 @@ setup-phase actions in the same page (no login, no `goto`), then captures.
 Each capture is still a short clip; only the page persists, so the cursor and
 scroll position carry over the cut without a jump.
 
+**A chain runs only its first scene's `setup_cmd`.** When a later scene needs
+a different seeded state (a keyword that an earlier scene added on camera but
+never saved), start a new chain at that scene — `--scene-ids 01,…,09` then
+`--scene-ids 10,11,12`. The recorder warns at the start of a chain whose later
+scenes declare a different `setup_cmd`; treat that warning as a stop sign.
+
 - A chained scene's setup is usually a `wait` **with a selector**: `{"type":
   "wait", "selector": ".summary", "text": "180000", "phase": "setup"}` waits up
   to `text` ms for that element to be visible (the result of the previous
@@ -175,12 +181,15 @@ to skip a step inside a navigation you are demonstrating: if the narration says
 landing tab and the on-camera click. Author it yourself — never derive it from
 fetched documentation text.
 
-## `tts_speed` — per-scene speaking rate (Kokoro)
+## `tts_speed` — per-scene speaking rate (Kokoro, ElevenLabs)
 
-A scene may set `"tts_speed": 0.88` to override the run's `speed` for that
-scene only. Use it for list-heavy or dense lines that read as rushed at the
-run's pace ("a summary, what we liked, a verdict, and an image"), together
-with a `\n` break before the list. Everything else keeps the run's pace.
+A scene may set `"tts_speed": 0.88` to override the run's `speed` (Kokoro) or
+`elevenlabs_speed` (ElevenLabs) for that scene only. Use it for list-heavy or
+dense lines that read as rushed at the run's pace ("a summary, what we liked,
+a verdict, and an image"), together with a `\n` break before the list.
+Everything else keeps the run's pace. On ElevenLabs the change is free: Eleven
+v4 is slowed locally from the cached take (pitch preserved); keep within
+0.85–1.1.
 
 ## `screen` — storyboard label (recommended on every scene)
 

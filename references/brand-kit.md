@@ -68,8 +68,13 @@ American-English tutorial narration sounds.
   like a tutorial than a pitch. (Only Chatterbox could carry rising
   intonation; don't rely on it.)
 - Brand names: verify pronunciation with the audio gate. Kokoro accepts IPA
-  via `lexicon`; Chatterbox reads plain text well but test multi-word brand
-  names ("All in One SEO" should flow as one unit).
+  via `lexicon`; Chatterbox and ElevenLabs take plain respellings via
+  `tts_spoken` (`{"TruSEO": "True SEO"}`), and every name respelled there gets
+  the gate's unbiased pronunciation check. With ElevenLabs a respelling is
+  required for coined names — the same voice says them differently from take
+  to take. Ask the user how each product name is said before voicing, and
+  test multi-word brand names on any engine ("All in One SEO" should flow as
+  one unit).
 - Spell out anything the engine might spell letter-by-letter or mis-read
   (URLs, versions — the normalizer handles common cases).
 
