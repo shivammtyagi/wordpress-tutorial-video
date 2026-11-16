@@ -70,6 +70,13 @@ else
 fi
 printf "%-14s %-14s %s\n" "venv-cbx(py)" "${cbx_ver:0:14}" "$cbx_status"
 
+# ElevenLabs premium narration (optional — never counted as missing; the key is not printed)
+if [ -n "${ELEVENLABS_API_KEY:-}" ]; then
+  printf "%-14s %-14s %s\n" "elevenlabs" "key set" "ok (premium narration available)"
+else
+  printf "%-14s %-14s %s\n" "elevenlabs" "-" "optional (set ELEVENLABS_API_KEY for premium narration)"
+fi
+
 # Playwright >= 1.59 check (via npx; may be slow on first run)
 pw_status="MISSING"; pw_ver="-"
 if pw_raw="$(npx --yes playwright --version 2>/dev/null)"; then
