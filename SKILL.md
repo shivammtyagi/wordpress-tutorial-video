@@ -96,6 +96,17 @@ Create the run directory `runs/<slug>-<hash>/` and write `config.json`:
   "capture_scale": 1,                        // 1 = native layout (safe); 2 = 4K master via CSS zoom — see caveat below
   "ui_zoom": null,                           // document zoom; default = capture_scale. 1.5 with capture_scale 2 lays the page out at 2560x1440 (UI at 75%) so content + panel both fit
   "browser_channel": null,                   // null = bundled Playwright Chromium; "chrome" = installed Google Chrome (own temp profile)
+  "browser_profile": null,                   // live sites: a profile the user signed into by hand (scripts/sign_in.mjs); no credentials are used
+  "record_channel": "chromium",              // with browser_profile: "chromium" (copy the session, record in the normal browser) | "profile" (record in the profile's Chrome)
+  "headless": true,                          // false shows the recording window (some third-party screens need it)
+  "block_writes": false,                     // true = read-only recording: saves, trash/delete/deactivate links never reach the site
+  "allow_write_patterns": [],                // regexes for POSTs that only READ data and must get through block_writes
+  "display_rewrites": [],                    // [{find, replace}] — show neutral demo text on a real site (display only, nothing saved)
+  "hide_selectors": [],                      // elements to hide while recording (avatars, thumbnails)
+  "emulate_focus": false,                    // draw text selections as if the window were focused
+  "navigation_timeout_ms": null,             // page-load timeout (default 30000; 90000 with a profile)
+  "settle_max_ms": 60000,                    // longest wait for the page to go idle before capture
+  "comma_pause_s": 0.35,                     // minimum pause after a comma when comma_pauses.py (step 5c) is run
   "dismiss_notices": true,                   // remove .notice/.update-nag before recording
   "allow_destructive": false,                // guard scenes clicking delete/deactivate/…
   "redact_selectors": [],                    // blur these elements while recording
@@ -186,6 +197,7 @@ with `--force` to redo it.
 | 5 | Voiceover + durations | `tts_chatterbox.py --run-dir <d>` (.venv-cbx; default) or `tts_kokoro.py` (.venv; fallback) or, for Premium, `python3 scripts/tts_elevenlabs.py --run-dir <d>` (run `--estimate` first) | `voices.md` |
 | 5a | Trim silences + compress pauses | `trim_audio.py --run-dir <d>` (venv) — run BEFORE the gate. **Skip** in Kokoro natural pacing mode and for ElevenLabs (their pauses are deliberate; edges are pre-trimmed) | `voices.md` |
 | 5b | **Audio gate** — per-scene WER, product-name pronunciation, word offsets | `verify_scenes.py --run-dir <d>` (venv); on failure regenerate that scene's audio (engine script `--force --scene-id NN`), re-trim, and re-run `verify_scenes.py --scene-id NN`, at most `max_fix_iterations` times | `verification.md` |
+| 5c | Comma pauses (optional, Kokoro) | `comma_pauses.py --run-dir <d>` (venv) when lists run together; then re-run `verify_scenes.py`. Never run `trim_audio.py` after it | `voices.md` |
 | 6 | Discover selectors + plan phases/cues | **you** — explore the live site | `selector-discovery.md` |
 | 7 | Record each scene | `node scripts/record_scene.mjs --run-dir <d> --scene-id NN --base-url <site>`; scenes whose start state is the *result* of the previous scene (an AI run, a wizard) record as a chain: `--scene-ids 06,07,08` (see `scene-schema.md` → Chained scenes) | `recording-tuning.md` |
 | 8 | Post-process each clip | `postprocess_clip.py --run-dir <d> --scene-id NN [--zoom]` | `ffmpeg-recipes.md` |
@@ -316,9 +328,17 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
   script, the run directory, a commit, or a chat message, and never echo it.
   Premium narration sends the narration text (not the screen recording) to
   ElevenLabs — use a local engine for text that must stay on the machine.
-- **Record against a staging or local site**, never production. Use
+- **Record against a staging or local site by default.** Use
   `redact_selectors` / `redact_patterns` to blur emails or license keys that
   appear in the admin.
+- **A live site is recorded only on the user's say-so, and read-only.** The
+  user signs in by hand with `scripts/sign_in.mjs` (no credentials reach the
+  skill; never ask for them), the run sets `browser_profile`, and
+  `block_writes: true` stays on so nothing on camera can be saved, trashed or
+  deactivated. Turn `block_writes` off only when the user asks for a scene that
+  must really save, and say what it will change. Use `display_rewrites` /
+  `hide_selectors` to keep customer names and domains out of the video. Full
+  recipe: `references/recording-tuning.md`.
 
 ## Troubleshooting
 
@@ -421,6 +441,23 @@ branded Chromium intro/outro cards · verify `full` · `max_fix_iterations` 2.
 - **A promo banner / NPS modal photobombs the recording** → add its selector to
   `dismiss_selectors` (removed the instant it renders), and dismiss it
   persistently at the source when possible (options table / usermeta).
+- **`browser profile is not signed in`** → run `node scripts/sign_in.mjs
+  --profile <dir> --url <site>/wp-admin/`, sign in with **Remember Me** ticked,
+  and quit that browser (⌘Q) before recording — a profile that is still open
+  is locked.
+- **`block_writes stopped this click`** → the scene clicked a trash/delete/
+  deactivate link, or a button whose request is a write. That is the guard
+  working. If the request only reads data, add a regex for it to
+  `allow_write_patterns`; destructive links are never allowlisted.
+- **A screen stays empty under `block_writes`** → it loads its data over POST.
+  The recorder lists the blocked requests per scene; allowlist the read-only one.
+- **A native dropdown never opens on camera** → the OS draws `<select>` lists
+  outside the page, so no screencast can show them. Use the `select` action:
+  the cursor clicks the dropdown and the chosen value appears.
+- **Actions land seconds after their cue on a heavy screen** → run with
+  `WTV_DEBUG=1` to see which step is slow; cue the action a word or two
+  earlier, and check `redact_patterns` are not broader than they need to be.
+- **Lists run together in Kokoro narration** → step 5c, `comma_pauses.py`.
 
 ## Limitations
 

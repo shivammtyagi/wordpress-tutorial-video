@@ -134,6 +134,9 @@ See `config.json` in [SKILL.md](SKILL.md#inputs--configjson). Key knobs:
 | `max_fix_iterations` | `2` | Cap on auto-fix rounds. |
 | `allow_destructive` | `false` | Recorder refuses delete/deactivate/… clicks unless enabled. |
 | `redact_selectors` / `redact_patterns` | `[]` | Blur secrets (emails, license keys) while recording. |
+| `browser_profile` | unset | Record a live site with a browser profile you signed into by hand (`node scripts/sign_in.mjs`); no credentials reach the skill. |
+| `block_writes` | `false` | Read-only recording: saves and trash/delete/deactivate links never reach the site. |
+| `display_rewrites` / `hide_selectors` | `[]` | Show neutral demo text on a real site without changing its data. |
 
 ## Cost note
 
@@ -164,7 +167,9 @@ narration needs your own ElevenLabs plan and bills per character.
 ```bash
 python3 -m pytest -q          # python steps (ffmpeg tests skip if ffmpeg absent)
 node tests/test_record_scene.mjs   # recorder against a static fixture (no WordPress)
+node tests/test_guards.mjs         # block_writes rules + profile helpers (no browser)
+node tests/test_block_writes.mjs   # block_writes against a mock WordPress over HTTP
 ```
 
-CI runs both on macOS for every push/PR (`.github/workflows/ci.yml`). TTS and
+CI runs all of them on macOS for every push/PR (`.github/workflows/ci.yml`). TTS and
 transcription have `--engine stub` modes so the suite needs no ML downloads.

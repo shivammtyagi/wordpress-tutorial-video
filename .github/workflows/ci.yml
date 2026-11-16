@@ -23,3 +23,7 @@ jobs:
           npx playwright install chromium --with-deps
       - name: Recorder fixture test
         run: node tests/test_record_scene.mjs
+      - name: Request guard + block_writes tests
+        run: |
+          node tests/test_guards.mjs
+          node tests/test_block_writes.mjs

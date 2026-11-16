@@ -38,16 +38,27 @@ Recording reads **only** `script.discovered.json`.
 
 | Field | Type | Notes |
 |-------|------|-------|
-| `type` | enum | `click`, `type`, `scroll`, `hover`, `wait`, `goto`, `press`, `eval`. |
+| `type` | enum | `click`, `type`, `scroll`, `hover`, `wait`, `goto`, `press`, `eval`, `select`, `paste`, `dblclick`. |
 | `target` | string | **Human-language** description ("Sitemaps submenu"). Claude writes this without DOM knowledge. |
 | `selector` | string\|null | Verified Playwright selector. Resolved during discovery. |
-| `text` | string | Required when `type == "type"` (text to type), `press` (key/chord) or `wait` (ms). |
+| `text` | string | Required when `type == "type"` or `paste` (the text), `press` (key/chord), `select` (the option's visible label) or `eval` (JavaScript); for `wait` it is the time in ms. |
 | `highlight` | bool | When true, draw a callout box around the element before clicking. |
 | `phase` | enum | `"setup"` (runs before recording starts: login already done, navigation, cleanup) or `"recorded"` (default; runs on camera). The delivered clip never shows setup actions. |
 | `cue` | string | Optional word/phrase from this scene's `narration`. The recorder fires the action when that word is spoken (per-scene word offsets from the audio gate). Omit for sequential pacing. |
+| `optional` | bool | When true, an element that never appears (within `optional_timeout_ms`, default 8000) skips the action instead of failing the scene — for a screen that may or may not show, such as a third-party account chooser. |
 
-`goto` uses `target` as a site-relative path (e.g. `/wp-admin/admin.php?page=...`).
+`goto` uses `target` as a site-relative path (e.g. `/wp-admin/admin.php?page=...`),
+or an absolute `https://…` URL for a third-party page in a connection flow.
 `goto` and `wait` actions never need selectors, even post-discovery.
+`select` picks the option whose visible label is `text` in a native `<select>`.
+The cursor glides to the dropdown and clicks, but the option list is never shown
+(the OS draws it outside the page, so the screencast can't capture it) — the
+closed dropdown simply changes value. Narrate the choice ("I'll choose High").
+`paste` clicks the field, then inserts `text` in one go like a real paste (input
+events fire, so framework-bound fields update; `clear: true` empties the field
+first). Use it when the narration says "paste" — scenes run in separate
+browsers, so no clipboard carries over.
+`dblclick` double-clicks the element — use it to highlight a code token on screen.
 
 ## Critical constraint: each scene starts from a fresh browser
 
