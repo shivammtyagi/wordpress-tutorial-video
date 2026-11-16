@@ -118,3 +118,97 @@ if (guardCode !== 5) {
   console.error(`FAIL: destructive guard expected exit 5, got ${guardCode}`); process.exit(1);
 }
 console.log('PASS: destructive guard blocks risky scene (exit 5)');
+
+// ---- scenario 4: select / paste / dblclick / optional + rewrites, hides, redaction --
+// Page state is asserted in-band: an `eval` action throws when the DOM is not
+// what the earlier actions should have produced, which fails the recording.
+const run4 = mkdtempSync(join(tmpdir(), 'recordtest4-'));
+mkdirSync(join(run4, 'audio'), { recursive: true });
+const check = (name, expr) => ({
+  type: 'eval', target: `assert: ${name}`,
+  text: `(async () => { const ok = await (${expr}); if (!ok) throw new Error('assert failed: ${name}'); })()`,
+});
+writeFileSync(join(run4, 'script.discovered.json'), JSON.stringify({
+  title: 'T', resolution: '640x360', fps: 24, voice: 'af_heart',
+  scenes: [{
+    id: '01', narration: 'Choose high, paste the code, and select the shortcode.', intent: 'New actions',
+    actions: [
+      { type: 'select', target: 'Priority dropdown', selector: '#priority', text: 'High' },
+      { type: 'paste', target: 'Code field', selector: '#code-field', text: 'abc123' },
+      { type: 'dblclick', target: 'the shortcode', selector: '#shortcode', highlight: true },
+      { type: 'click', target: 'Account chooser (not shown here)', selector: '#no-such-screen',
+        optional: true, optional_timeout_ms: 400 },
+      check('select picked the option by its label', `document.querySelector('#priority').value === 'high'`),
+      check('paste inserted the text and fired one input event',
+        `document.querySelector('#code-field').value === 'abc123' && document.querySelector('#code-field').dataset.inputs === '1'`),
+      check('dblclick reached the element', `document.querySelector('#shortcode').dataset.dbl === '1'`),
+      check('display rewrite changed the visible text and descriptive attributes',
+        `document.querySelector('#owner').textContent === 'Demo User' && document.querySelector('#owner').title === "Demo User's profile"` +
+        ` && document.querySelector('#avatar').alt === 'Demo User' && document.querySelector('#code-field').placeholder === 'Paste the Demo User code'`),
+      check('display rewrite left the link target and form values alone',
+        `document.querySelector('#owner').getAttribute('href') === 'https://example-garden.com/author/jane'` +
+        ` && document.querySelector('#notes').value === 'Jane Smith wrote this draft'`),
+      check('hide_selectors hid the avatar', `getComputedStyle(document.querySelector('#avatar')).visibility === 'hidden'`),
+      check('redaction blurred the leaf holding the email, not its container',
+        `/blur/.test(document.querySelector('#account-email').style.filter) && !document.querySelector('#account-chip').style.filter` +
+        ` && !document.querySelector('#account-plan').style.filter`),
+      check('redaction and rewrites catch content added later',
+        `(async () => { const d = document.createElement('div'); d.id = 'late';` +
+        ` d.innerHTML = '<div id="late-mail">bob@example-garden.com</div><div id="late-name">Jane Smith</div>';` +
+        ` document.body.appendChild(d); await new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r)));` +
+        ` return /blur/.test(document.querySelector('#late-mail').style.filter) && document.querySelector('#late-name').textContent === 'Demo User'; })()`),
+      check('exactly one tutorial cursor', `document.querySelectorAll('#__wtv_cursor').length === 1`),
+      check('extra_css applied', `getComputedStyle(document.querySelector('#bar')).outlineStyle === 'dashed'`),
+    ],
+    focus_selector: '#widgets', hold_after_ms: 100, verify: { expect_on_screen: 'widgets' },
+  }],
+}));
+writeFileSync(join(run4, 'config.json'), JSON.stringify({
+  capture_scale: 1, action_timeout_ms: 3000, emulate_focus: true, settle_max_ms: 5000,
+  display_rewrites: [{ find: 'Jane Smith', replace: 'Demo User' }],
+  hide_selectors: ['#avatar'],
+  redact_patterns: ['[\\w.]+@example-garden\\.com'],
+  extra_css: '#bar{outline:1px dashed red}',
+}));
+writeFileSync(join(run4, 'audio', 'durations.json'), JSON.stringify({ '01': 1.0 }));
+const out4 = execFileSync('node', [
+  join(ROOT, 'scripts', 'record_scene.mjs'),
+  '--run-dir', run4, '--scene-id', '01', '--base-url', fixtureUrl,
+], { stdio: ['ignore', 'pipe', 'inherit'] }).toString();
+process.stdout.write(out4);
+if (!/optional action "Account chooser \(not shown here\)" skipped/.test(out4)) {
+  console.error('FAIL: the optional action was not reported as skipped'); process.exit(1);
+}
+const ev4 = JSON.parse(readFileSync(join(run4, 'clips', '01.events.json'), 'utf8')).events.map((e) => e.kind);
+for (const kind of ['select', 'paste', 'type_end', 'click']) {
+  if (!ev4.includes(kind)) { console.error(`FAIL: no '${kind}' event logged (${ev4.join(',')})`); process.exit(1); }
+}
+console.log('PASS: select/paste/dblclick/optional + rewrites, hides, redaction, extra_css');
+
+// ---- scenario 5: a required action that never appears still fails, with evidence ----
+const run5 = mkdtempSync(join(tmpdir(), 'recordtest5-'));
+mkdirSync(join(run5, 'audio'), { recursive: true });
+writeFileSync(join(run5, 'script.discovered.json'), JSON.stringify({
+  title: 'T', resolution: '640x360', fps: 24, voice: 'af_heart',
+  scenes: [{
+    id: '01', narration: 'Click a button that is not there.', intent: 'Failure evidence',
+    actions: [{ type: 'click', target: 'Missing button', selector: '#no-such-button' }],
+    focus_selector: '#panel', hold_after_ms: 100, verify: { expect_on_screen: 'x' },
+  }],
+}));
+writeFileSync(join(run5, 'config.json'), JSON.stringify({ capture_scale: 1, action_timeout_ms: 800 }));
+writeFileSync(join(run5, 'audio', 'durations.json'), JSON.stringify({ '01': 0.5 }));
+let fail5 = { status: 0, stderr: '' };
+try {
+  execFileSync('node', [
+    join(ROOT, 'scripts', 'record_scene.mjs'),
+    '--run-dir', run5, '--scene-id', '01', '--base-url', fixtureUrl,
+  ], { stdio: 'pipe' });
+} catch (e) { fail5 = { status: e.status, stderr: String(e.stderr) }; }
+if (fail5.status !== 1 || !existsSync(join(run5, 'clips', '01.error.png'))
+    || !/visible buttons: \[.*Enable Sitemap|visible buttons: \[/.test(fail5.stderr)) {
+  console.error(`FAIL: expected exit 1 with a screenshot and a button list, got ${fail5.status}\n${fail5.stderr}`);
+  process.exit(1);
+}
+console.log('PASS: a missing required element fails the scene and leaves evidence');
+

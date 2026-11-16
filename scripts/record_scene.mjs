@@ -18,7 +18,9 @@
 // capture still stays short; only the page persists.
 //
 // Credentials (for real WP sites) are read from the env vars named in
-// config.json (wp_user_env / wp_pass_env), never hard-coded.
+// config.json (wp_user_env / wp_pass_env), never hard-coded. With
+// `browser_profile` set, no credentials are used at all: the recorder reuses a
+// browser profile the user signed into by hand (scripts/sign_in.mjs).
 // When --base-url points at a file:// fixture, login and WP checks are skipped.
 //
 // Exit codes: 2 usage · 3 login/session · 4 empty recording · 5 destructive guard · 6 PHP error · 7 browser died mid-capture (scene too long / low memory)
@@ -27,6 +29,8 @@ import { readFileSync, existsSync, mkdirSync, writeFileSync, statSync } from 'no
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
+import { resolveProfileDir, profileLaunchOpts } from './lib/profile.mjs';
+import { makeWriteBlocker, isAbsoluteUrl, sameOrigin } from './lib/guards.mjs';
 
 // Genuine macOS arrow cursor (extracted from NSCursor.arrow at 5x), logical
 // size 28x40 with hotspot (5,5) — displayed at logical size so the capture's
@@ -82,6 +86,12 @@ const baseUrl = arg('base-url', cfg.base_url || cfg.site_url);
 const actionTimeout = Number(cfg.action_timeout_ms ?? 10000);
 const accent = cfg.accent_color || '#2271b1'; // highlight/ripple color (WP admin blue default)
 const isFixture = !!baseUrl && baseUrl.startsWith('file://');
+// Signed-in persistent profile (config `browser_profile`); null = default mode.
+const profileDir = isFixture ? null : resolveProfileDir(cfg.browser_profile, runDir);
+// WTV_DEBUG=1 prints per-step timings for each action.
+const dbgT0 = Date.now();
+const dbg = process.env.WTV_DEBUG
+  ? (msg) => console.log(`[dbg +${((Date.now() - dbgT0) / 1000).toFixed(2)}s] ${msg}`) : () => {};
 
 const durations = existsSync(join(runDir, 'audio', 'durations.json'))
   ? JSON.parse(readFileSync(join(runDir, 'audio', 'durations.json'), 'utf8')) : {};
@@ -329,9 +339,16 @@ function cueOffsetMs(cue) {
 
 const PHP_ERROR = /(Fatal error|Parse error|Warning|Notice|Deprecated)\b[^<]{0,200}? in [^<]{0,300}? on line \d+/;
 
+// True when the page is on the WordPress site under test (not e.g. Google or
+// Bing during an account-connection flow). WP-specific checks only run there.
+function onSite(url) {
+  return !!baseUrl && sameOrigin(url, baseUrl);
+}
+
 async function preflight(page) {
   if (isFixture) return;
   const url = page.url();
+  if (!onSite(url)) return;
   if (url.includes('wp-login.php')) {
     console.error('record_scene: session expired (redirected to wp-login.php)');
     process.exit(3);
@@ -341,7 +358,9 @@ async function preflight(page) {
       document.querySelectorAll('.notice, .update-nag').forEach((el) => el.remove());
     }).catch(() => {});
   }
-  const html = await page.content();
+  // page.content() throws while a navigation is still in flight; the next
+  // preflight (after it lands) does the check instead.
+  const html = await page.content().catch(() => '');
   const m = html.match(PHP_ERROR);
   if (m) {
     console.error(`record_scene: PHP error rendered on page: ${m[0].slice(0, 160)}`);
@@ -351,6 +370,23 @@ async function preflight(page) {
 
 async function login(page) {
   if (!baseUrl || isFixture) return;
+  if (profileDir) {
+    // Signed-in profile: never type credentials — just confirm the session.
+    const root = baseUrl.replace(/\/wp-admin\/?$/, '').replace(/\/$/, '');
+    // Check the session on the scene's own first page when it is a wp-admin
+    // URL (saves a load — live dashboards with heavy widgets can be slow).
+    const first = (scene.actions || []).find((a) => a.type === 'goto');
+    const probe = first && String(first.target).startsWith('/wp-admin') ? first.target : '/wp-admin/';
+    await page.goto(`${root}${probe}`, { waitUntil: 'domcontentloaded' });
+    const inAdmin = /\/wp-admin\//.test(page.url()) && !page.url().includes('wp-login.php');
+    if (!inAdmin) {
+      console.error(`record_scene: browser profile is not signed in to ${root} ` +
+        `(landed on ${page.url()}). Run scripts/sign_in.mjs and sign in first — tick ` +
+        '"Remember Me", or WordPress drops the session when the browser closes.');
+      process.exit(3);
+    }
+    return;
+  }
   const userEnv = cfg.wp_user_env || 'WP_ADMIN_USER';
   const passEnv = cfg.wp_pass_env || 'WP_ADMIN_PASS';
   const user = process.env[userEnv];
@@ -424,10 +460,16 @@ async function bbox(page, loc) {
 
 async function runAction(page, a) {
   const sel = a.selector;
+  // `optional: true` actions give up sooner: the screen they belong to may
+  // simply not appear (a Google account chooser), and the scene carries on.
+  const visTimeout = a.optional ? Number(a.optional_timeout_ms ?? 8000) : actionTimeout;
+  dbg(`action ${a.type} ${a.target}`);
   switch (a.type) {
     case 'goto': {
       const root = (baseUrl || '').replace(/\/wp-admin\/?$/, '').replace(/\/$/, '');
+      // Absolute URLs (a third-party site in a connection flow) are used as-is.
       const target = isFixture ? baseUrl
+        : isAbsoluteUrl(a.target) ? a.target
         : root + (a.target.startsWith('/') ? a.target : '/' + a.target);
       await page.goto(target, { waitUntil: 'domcontentloaded' });
       await preflight(page);
@@ -435,11 +477,13 @@ async function runAction(page, a) {
     }
     case 'click': {
       const loc = locate(page, sel);
-      await loc.waitFor({ state: 'visible', timeout: actionTimeout });
+      await loc.waitFor({ state: 'visible', timeout: visTimeout });
+      dbg('  visible');
       await ensureUnclipped(page, loc);
       await ensureCentered(page, loc);
       await ensureOnScreen(page, loc);
       await settledBox(page, loc);
+      dbg('  centered');
       if (a.highlight) await showHighlight(page, loc);
       // Coordinate input, never loc.click(): Playwright's actionability loop
       // re-fires its own instant scrollIntoView on every retry, which fights
@@ -448,6 +492,7 @@ async function runAction(page, a) {
       // scrolled, glided, and verified visibility — click where the cursor is.
       let box2 = await glideCursorTo(page, loc);
       if (box2) box2 = await clickableBox(page, loc, sel);
+      dbg('  glided');
       // page.screencast FREEZES on renderer-initiated cross-document
       // navigations (verified empirically; API goto records fine). For links
       // that leave the current document: perform the click visually with its
@@ -466,18 +511,103 @@ async function runAction(page, a) {
         await loc.click({ force: true, timeout: 5000 });
       }
       logEvent('click');
+      dbg('  clicked');
       if (crossDoc) {
         const target = new URL(href, page.url()).toString();
-        await page.goto(target, { waitUntil: 'domcontentloaded' });
+        const before = blockedWrites.length;
+        try {
+          await page.goto(target, { waitUntil: 'domcontentloaded' });
+        } catch (err) {
+          // block_writes aborted the navigation (a trash/delete/deactivate link):
+          // say so, instead of surfacing a bare network error.
+          if (blockedWrites.length > before) {
+            throw new Error(`block_writes stopped this click from reaching the site (${blockedWrites[blockedWrites.length - 1]})`);
+          }
+          throw err;
+        }
       } else {
         await page.waitForLoadState('domcontentloaded', { timeout: actionTimeout }).catch(() => {});
       }
+      dbg('  load-state done');
       await preflight(page);
+      dbg('  preflight done');
+      break;
+    }
+    case 'dblclick': {
+      // Double-click — e.g. to select a code token on screen before "copying" it.
+      const loc = locate(page, sel);
+      await loc.waitFor({ state: 'visible', timeout: visTimeout });
+      await ensureUnclipped(page, loc);
+      await ensureCentered(page, loc);
+      await ensureOnScreen(page, loc);
+      await settledBox(page, loc);
+      if (a.highlight) await showHighlight(page, loc);
+      let box = await glideCursorTo(page, loc);
+      if (box) box = await clickableBox(page, loc, sel);
+      if (box) {
+        await pressEffect(page, box);
+        await page.mouse.dblclick(box.x + box.width / 2, box.y + box.height / 2);
+      } else {
+        await loc.dblclick({ force: true, timeout: 5000 });
+      }
+      logEvent('click');
+      await sleep(300);
+      break;
+    }
+    case 'paste': {
+      // Click the field, then insert `text` the way a real paste does: all at
+      // once, firing input events (so Vue/React bindings update). Scenes run in
+      // separate browsers, so a clipboard can't carry text from one to the next.
+      const loc = locate(page, sel);
+      await loc.waitFor({ state: 'visible', timeout: visTimeout });
+      await ensureUnclipped(page, loc);
+      await ensureCentered(page, loc);
+      await ensureOnScreen(page, loc);
+      let box = await glideCursorTo(page, loc, a.click_at);
+      if (box) box = await clickableBox(page, loc, sel);
+      if (box) {
+        const pt = pointIn(box, a.click_at);
+        await pressEffect(page, { x: pt.x, y: pt.y, width: 0, height: 0 });
+        await page.mouse.click(pt.x, pt.y);
+      } else {
+        await loc.click({ force: true, timeout: 5000 });
+      }
+      logEvent('click');
+      await sleep(350);
+      if (a.clear) {
+        await loc.fill('').catch(() => {});
+        await sleep(150);
+      }
+      // In the element's own document: the field may live inside an iframe.
+      await loc.evaluate((el, t) => el.ownerDocument.execCommand('insertText', false, t), a.text || '');
+      logEvent('paste', { chars: (a.text || '').length });
+      logEvent('type_end');
+      await sleep(250);
+      break;
+    }
+    case 'select': {
+      // Native <select> popups are drawn by the OS, not the page, so the
+      // screencast never shows them. Show the click on the dropdown, then set
+      // the option by its visible label — the closed select reads the new value.
+      const loc = locate(page, sel);
+      await loc.waitFor({ state: 'visible', timeout: visTimeout });
+      await ensureUnclipped(page, loc);
+      await ensureCentered(page, loc);
+      await ensureOnScreen(page, loc);
+      await settledBox(page, loc);
+      if (a.highlight) await showHighlight(page, loc);
+      const box = await glideCursorTo(page, loc);
+      if (box) await pressEffect(page, box);
+      logEvent('click');
+      await sleep(200);
+      await loc.selectOption({ label: a.text }, { timeout: actionTimeout });
+      logEvent('select', { label: a.text });
+      await sleep(250);
       break;
     }
     case 'type': {
       const loc = locate(page, sel);
-      await loc.waitFor({ state: 'visible', timeout: actionTimeout });
+      await loc.waitFor({ state: 'visible', timeout: visTimeout });
       await ensureUnclipped(page, loc);
       await ensureCentered(page, loc);
       await ensureOnScreen(page, loc);
@@ -510,7 +640,7 @@ async function runAction(page, a) {
       // then the highlight frames what it is resting on (a click is the other
       // way round — the ring marks where the click will land).
       const loc = locate(page, sel);
-      await loc.waitFor({ state: 'visible', timeout: actionTimeout });
+      await loc.waitFor({ state: 'visible', timeout: visTimeout });
       await ensureUnclipped(page, loc);
       await ensureCentered(page, loc);
       await ensureOnScreen(page, loc);
@@ -581,19 +711,116 @@ async function runAction(page, a) {
 // profile — never the user's running instance). Use a channel when the
 // bundled headless shell is unstable on the machine (see SKILL.md
 // troubleshooting: "browser dies ~30s after launch").
-const launchOpts = {};
-if (cfg.browser_channel) launchOpts.channel = cfg.browser_channel;
-const browser = await chromium.launch(launchOpts);
-const context = await browser.newContext({
+//
+// Three launch modes:
+//   default                      a throwaway browser that logs in with the
+//                                env-var credentials.
+//   browser_profile              the profile the user signed into by hand
+//                                (scripts/sign_in.mjs) is opened only to READ
+//                                its session (cookies + storage, in memory,
+//                                never written to disk), and the scene records
+//                                in the same throwaway browser as the default
+//                                mode. Real Chrome under automation was measured
+//                                100-500x slower on heavy admin screens.
+//   browser_profile +            record inside the profile's own browser — for
+//   record_channel: "profile"    flows that need real Chrome (Google account
+//                                screens).
+// `headless: false` shows the window; some third-party screens serve headless
+// browsers a different (legacy) page, e.g. Google's OAuth consent.
+const contextOpts = {
   viewport: { width: width * scale, height: height * scale },
   ignoreHTTPSErrors: cfg.ignore_https_errors !== false,
-});
+};
+const headless = cfg.headless !== false;
+const launchOpts = { headless };
+if (cfg.browser_channel) launchOpts.channel = cfg.browser_channel;
+if (profileDir && !existsSync(profileDir)) {
+  console.error(`record_scene: browser_profile ${profileDir} does not exist. Create it and sign in with:\n` +
+    `  node scripts/sign_in.mjs --profile ${cfg.browser_profile} --url ${baseUrl || '<site>/wp-admin/'}`);
+  process.exit(3);
+}
+const recordInProfile = !!profileDir && cfg.record_channel === 'profile';
+let browser = null; // stays null when recording inside the profile (persistent context)
+let context;
+if (recordInProfile) {
+  context = await chromium.launchPersistentContext(profileDir, {
+    ...contextOpts,
+    ...profileLaunchOpts(cfg, { headless }),
+  });
+} else {
+  let storageState;
+  if (profileDir) {
+    const src = await chromium.launchPersistentContext(profileDir, profileLaunchOpts(cfg, { headless: true }));
+    storageState = await src.storageState(); // in memory only — never written to disk
+    await src.close();
+  }
+  browser = await chromium.launch(launchOpts);
+  context = await browser.newContext(storageState ? { ...contextOpts, storageState } : contextOpts);
+}
+const closeBrowser = () => (browser ? browser.close() : context.close());
+if (profileDir && !cfg.block_writes) {
+  console.error('record_scene: NOTE — recording with a signed-in profile and block_writes is off: anything ' +
+    'saved, trashed or deactivated on camera reaches the real site. Set "block_writes": true for a read-only recording.');
+}
+// Keep every init script so it can be re-applied to frames whose document was
+// replaced in place: some page builders (Avada) open their preview iframe as
+// about:blank and then write the page into it, which discards init scripts —
+// rewrites, hides and dismissals would silently never run inside it.
+const initScripts = [];
+{
+  const add = context.addInitScript.bind(context);
+  context.addInitScript = (script, arg) => {
+    if (typeof script === 'string') initScripts.push(script);
+    return add(script, arg);
+  };
+}
+await context.addInitScript(`(() => {
+  const mark = () => document.documentElement && document.documentElement.setAttribute('data-wtv-init', '1');
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', mark); else mark();
+})()`);
+async function reapplyInitScripts(page) {
+  for (const frame of page.frames()) {
+    try {
+      const fresh = await frame.evaluate(() => !!document.documentElement &&
+        document.readyState !== 'loading' && document.documentElement.getAttribute('data-wtv-init') !== '1');
+      if (!fresh) continue;
+      for (const sc of initScripts) await frame.evaluate(sc).catch(() => {});
+      await frame.evaluate(() => document.documentElement.setAttribute('data-wtv-init', '1'));
+      dbg(`re-applied init scripts in ${frame.url().slice(0, 80)}`);
+    } catch { /* detached / cross-origin frame */ }
+  }
+}
+
+// `block_writes`: read-only safety net for real sites. Aborts every write
+// request (POST/PUT/PATCH/DELETE) to the site's origin, except URL patterns the
+// run allowlists because the screen needs them to *read* data, and every
+// trash/delete/deactivate link whatever its method (rules: lib/guards.mjs).
+// Armed only after login, so the default mode's own login POST gets through.
+const blockedWrites = [];
+let writeGuardArmed = false;
+if (cfg.block_writes && baseUrl && !isFixture) {
+  const blocked = makeWriteBlocker(baseUrl, cfg.allow_write_patterns);
+  await context.route('**/*', (route) => {
+    const req = route.request();
+    const why = writeGuardArmed ? blocked(req.method(), req.url()) : null;
+    if (!why) return route.continue();
+    let path = req.url();
+    try { const u = new URL(path); path = u.pathname + u.search; } catch { /* keep the raw url */ }
+    blockedWrites.push(`${req.method()} ${path.slice(0, 90)}`);
+    // A blocked page navigation (a classic form Save, a row-action link) is
+    // answered with "204 No Content": the browser stays on the page it was on,
+    // with everything the viewer typed still showing. Aborting it instead would
+    // replace the screen with the browser's error page mid-recording.
+    if (req.isNavigationRequest()) return route.fulfill({ status: 204, body: '' });
+    return route.abort();
+  });
+}
 if (zoom !== 1) {
   // Top document only: an iframe (the block editor canvas) already scales with
   // its parent, so zooming it too renders its text at zoom² (the "huge font").
   await context.addInitScript(`(() => {
     if (window !== window.top) return;
-    const apply = () => { document.documentElement.style.zoom = '${zoom}'; };
+    const apply = () => { if (document.documentElement) document.documentElement.style.zoom = '${zoom}'; };
     document.addEventListener('DOMContentLoaded', apply);
     apply();
   })()`);
@@ -602,6 +829,9 @@ if (zoom !== 1) {
 // eased CSS transition (Playwright's showActions cursor double-scales under
 // zoom, so we draw our own — one code path for every capture scale).
 await context.addInitScript(`(() => {
+  // Top document only: the cursor is positioned in page coordinates and drawn
+  // above every iframe; a copy inside an iframe would just sit there.
+  if (window !== window.top) return;
   const mk = () => {
     if (document.getElementById('__wtv_cursor') || !document.body) return;
     const c = document.createElement('div');
@@ -622,19 +852,22 @@ await context.addInitScript(`(() => {
   document.addEventListener('DOMContentLoaded', mk);
   mk();
 })()`);
-if (cfg.inject_css) {
+if (cfg.inject_css || cfg.extra_css) {
   // Capture-time CSS overrides for layout that misbehaves under the CSS-zoom
   // 4K capture (a modal sized in vh that outgrows the viewport, a dropdown
-  // that mis-measures). Applied to every page the recorder opens, never to the
-  // site itself.
-  const css = JSON.stringify(String(cfg.inject_css));
+  // that mis-measures), or for a visible ::selection colour (an unfocused
+  // recording window draws selections in grey). Applied to every page and
+  // origin the recorder opens, never to the site itself. `extra_css` is an
+  // alias of `inject_css`; both are applied when both are set.
+  const css = JSON.stringify([cfg.inject_css, cfg.extra_css].filter(Boolean).map(String).join('\n'));
   await context.addInitScript(`(() => {
     const add = () => {
-      if (document.getElementById('__wtv_css') || !document.head) return;
+      const host = document.head || document.documentElement;
+      if (document.getElementById('__wtv_css') || !host) return;
       const st = document.createElement('style');
       st.id = '__wtv_css';
       st.textContent = ${css};
-      document.head.appendChild(st);
+      host.appendChild(st);
     };
     document.addEventListener('DOMContentLoaded', add);
     add();
@@ -658,33 +891,115 @@ if ((cfg.dismiss_selectors || []).length) {
     } else { arm(); }
   })()`);
 }
+// Display-only rewrites for demo recordings on a real site: swap visible text
+// (post titles, site name, domain, user name) so the video reads as neutral demo
+// content without touching the site's data. Only text nodes and descriptive
+// attributes change — never hrefs or form values, so links still work and
+// nothing rewritten can be saved. MutationObserver callbacks run before the
+// next paint, so re-rendered originals never reach a frame.
+if ((cfg.display_rewrites || []).length || (cfg.hide_selectors || []).length) {
+  const rewrites = JSON.stringify((cfg.display_rewrites || [])
+    .filter((r) => r && r.find).map((r) => [String(r.find), String(r.replace ?? '')]));
+  const hide = JSON.stringify(cfg.hide_selectors || []);
+  await context.addInitScript(`(() => {
+    const RW = ${rewrites}; const HIDE = ${hide};
+    const ATTRS = ['title', 'alt', 'placeholder', 'aria-label', 'data-original-title'];
+    const swap = (s) => { let o = s; for (const [f, r] of RW) if (o.includes(f)) o = o.split(f).join(r); return o; };
+    const fixText = (n) => { const v = n.nodeValue; if (v) { const w = swap(v); if (w !== v) n.nodeValue = w; } };
+    const fixEl = (el) => { for (const a of ATTRS) { const v = el.getAttribute && el.getAttribute(a);
+      if (v) { const w = swap(v); if (w !== v) el.setAttribute(a, w); } } };
+    const SKIP = /^(SCRIPT|STYLE|NOSCRIPT|TEXTAREA)$/;
+    const walk = (root) => {
+      if (!root) return;
+      if (root.nodeType === 3) { const p = root.parentNode; if (!p || !SKIP.test(p.nodeName)) fixText(root); return; }
+      if (root.nodeType !== 1 && root.nodeType !== 9 && root.nodeType !== 11) return;
+      if (root.nodeType === 1) { if (SKIP.test(root.tagName)) return; fixEl(root); }
+      const tw = document.createTreeWalker(root, 5 /* SHOW_ELEMENT|SHOW_TEXT */);
+      for (let n = tw.nextNode(); n; n = tw.nextNode()) {
+        if (n.nodeType === 3) { const p = n.parentNode; if (!p || !SKIP.test(p.nodeName)) fixText(n); }
+        else fixEl(n);
+      }
+    };
+    const css = () => { if (!HIDE.length || document.getElementById('__wtv_hide')) return;
+      const st = document.createElement('style'); st.id = '__wtv_hide';
+      st.textContent = HIDE.join(',') + '{visibility:hidden !important}';
+      (document.head || document.documentElement).appendChild(st); };
+    const arm = () => {
+      css(); if (RW.length) walk(document.body);
+      if (!RW.length) return;
+      new MutationObserver((ms) => { for (const m of ms) {
+        if (m.type === 'characterData') { const p = m.target.parentNode; if (!p || !SKIP.test(p.nodeName)) fixText(m.target); }
+        else if (m.type === 'attributes') fixEl(m.target);
+        else m.addedNodes.forEach(walk);
+      } }).observe(document.documentElement, { childList: true, subtree: true,
+        characterData: true, attributes: true, attributeFilter: ATTRS });
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arm); else arm();
+  })()`);
+}
 if ((cfg.redact_selectors || []).length || (cfg.redact_patterns || []).length) {
   const selectors = JSON.stringify(cfg.redact_selectors || []);
   const patterns = JSON.stringify(cfg.redact_patterns || []);
+  // Runs on every origin, including third-party sign-in screens in a
+  // connection flow. Incremental: one full pass at load, then only the subtrees
+  // that changed, batched per animation frame. (Rescanning the whole document
+  // on every mutation starved the main thread on big list screens — each
+  // scripted action then ran 10+ seconds late.)
   await context.addInitScript(`(() => {
-    const SEL = ${selectors}; const PAT = ${patterns}.map((p) => new RegExp(p, 'g'));
-    const blur = () => {
-      SEL.forEach((s) => document.querySelectorAll(s).forEach((el) => {
-        el.style.filter = 'blur(6px)';
-      }));
+    const SEL = ${selectors}; const PAT = ${patterns}.map((p) => new RegExp(p));
+    const blurEl = (el) => { el.style.filter = 'blur(6px)'; };
+    // Text-bearing leaves too: account chips on third-party sign-in screens
+    // (Google, Bing) put the email in a bare <div>. Leaves only, so a match
+    // never blurs a whole container.
+    const LEAF = 'div, p, a, li, strong, b';
+    const cand = (el) => el.matches('input, td, code, span') || (el.matches(LEAF) && el.children.length === 0);
+    const test = (el) => { const v = el.value || el.textContent || '';
+      if (v && PAT.some((r) => r.test(v))) blurEl(el); };
+    const scan = (root) => {
+      if (!root || root.nodeType !== 1 || !root.isConnected) return;
+      for (const s of SEL) {
+        if (root.matches && root.matches(s)) blurEl(root);
+        root.querySelectorAll(s).forEach(blurEl);
+      }
       if (PAT.length) {
-        document.querySelectorAll('input, td, code, span').forEach((el) => {
-          const v = el.value || el.textContent || '';
-          if (PAT.some((r) => (r.lastIndex = 0, r.test(v)))) el.style.filter = 'blur(6px)';
-        });
+        if (root.matches && cand(root)) test(root);
+        root.querySelectorAll('input, td, code, span, ' + LEAF).forEach((el) => { if (cand(el)) test(el); });
       }
     };
-    new MutationObserver(blur).observe(document.documentElement, { childList: true, subtree: true });
-    document.addEventListener('DOMContentLoaded', blur);
+    let pending = new Set(); let queued = false;
+    const flush = () => { queued = false; const roots = pending; pending = new Set(); roots.forEach(scan); };
+    const arm = () => {
+      scan(document.body);
+      new MutationObserver((ms) => {
+        for (const m of ms) {
+          if (m.type === 'characterData') { if (m.target.parentElement) pending.add(m.target.parentElement); }
+          else m.addedNodes.forEach((n) => { if (n.nodeType === 1) pending.add(n); else if (n.parentElement) pending.add(n.parentElement); });
+        }
+        if (pending.size && !queued) { queued = true; requestAnimationFrame(flush); }
+      }).observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    };
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', arm); else arm();
   })()`);
 }
-const page = await context.newPage();
+const page = recordInProfile ? (context.pages()[0] || await context.newPage()) : await context.newPage();
+// `emulate_focus`: make the page behave as if its window had focus. A headed
+// recording window is usually behind other windows, so Chromium draws text
+// selections in inactive grey and some :focus styles never appear. Works where
+// a site's CSP blocks injected styles (Bing), unlike a ::selection rule.
+if (cfg.emulate_focus) {
+  try {
+    const cdp = await context.newCDPSession(page);
+    await cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+  } catch (e) { console.error(`record_scene: focus emulation unavailable (${e.message})`); }
+}
+// Real sites can be far slower than a local install: allow longer page loads.
+page.setDefaultNavigationTimeout(Number(cfg.navigation_timeout_ms ?? (profileDir ? 90000 : 30000)));
 // Surface renderer crashes and unexpected closes explicitly — otherwise the
 // only symptom is a late "Target page ... has been closed" from screencast.stop.
 page.on('crash', () => console.error('record_scene: PAGE CRASHED (renderer died) — heavy page under capture?'));
 page.on('close', () => { if (capturing) console.error(`record_scene: page closed during capture at +${((Date.now() - captureT0) / 1000).toFixed(1)}s`); });
 const launchedAt = Date.now();
-browser.on('disconnected', () => {
+(browser || context).on(browser ? 'disconnected' : 'close', () => {
   if (!capturing) return;
   console.error(`record_scene: BROWSER PROCESS DIED at +${((Date.now() - captureT0) / 1000).toFixed(1)}s of capture ` +
     `(${((Date.now() - launchedAt) / 1000).toFixed(1)}s after launch). ` +
@@ -715,6 +1030,46 @@ if (scenes[0].setup_cmd) {
 }
 
 await login(page);
+writeGuardArmed = true; // from here on nothing can be saved when block_writes is set
+
+// Wait until the page's main thread is responsive before filming: heavy admin
+// screens (and some plugins' scripts in real Chrome) can freeze the page for
+// many seconds after load, and any scripted action sent during a freeze lands
+// that much later than its narration cue. Idle = a requestAnimationFrame round
+// trip under 250ms, three times in a row (capped by settle_max_ms). Each round
+// trip is itself capped: a window that is not being painted never fires
+// requestAnimationFrame, and that must not hang the recorder.
+async function waitForIdle(page, maxMs) {
+  const t0 = Date.now(); let quiet = 0;
+  while (Date.now() - t0 < maxMs) {
+    const s = Date.now();
+    const fired = await Promise.race([
+      page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(true)))).catch(() => false),
+      sleep(2000).then(() => false),
+    ]);
+    quiet = fired && Date.now() - s < 250 ? quiet + 1 : 0;
+    if (quiet >= 3) return Date.now() - t0;
+    await sleep(200);
+  }
+  return -1;
+}
+
+// A failed action leaves more than a screenshot: where the page was and which
+// buttons were on it — essential for one-shot flows on third-party screens.
+async function describeScreen(page) {
+  let where = '';
+  try { const u = new URL(page.url()); where = u.host + u.pathname; } catch { /* about:blank */ }
+  const buttons = await page.locator('button:visible, [role=button]:visible, input[type=submit]:visible')
+    .allInnerTexts().catch(() => []);
+  return { where, buttons: buttons.map((t) => t.trim().replace(/\s+/g, ' ')).filter(Boolean).slice(0, 15) };
+}
+
+// `optional: true`: the action's element never appeared → skip it and carry on.
+const skipOptional = (a, err) => {
+  if (!(a.optional && err?.name === 'TimeoutError')) return false;
+  console.log(`record_scene: optional action "${a.target}" skipped (not shown)`);
+  return true;
+};
 
 for (let si = 0; si < scenes.length; si++) {
 beginScene(scenes[si]);
@@ -735,11 +1090,16 @@ for (const a of setupActions) {
   try {
     await runAction(page, a);
   } catch (err) {
+    if (skipOptional(a, err)) continue;
     err.message = `setup ${a.type} "${a.target}" (${a.selector || 'no selector'}): ${err.message}`;
     throw err;
   }
 }
+await reapplyInitScripts(page);
 await sleep(400); // settle before capture
+const settled = await waitForIdle(page, Number(cfg.settle_max_ms ?? 60000));
+if (settled < 0) console.error('record_scene: page never went idle before capture (continuing)');
+else if (settled > 3000) console.log(`record_scene: waited ${(settled / 1000).toFixed(1)}s for the page to go idle`);
 
 // ---- recorded phase -------------------------------------------------------------
 await page.screencast.start({
@@ -762,7 +1122,9 @@ for (const a of recordedActions) {
   }
   try {
     await runAction(page, a);
+    await reapplyInitScripts(page);
   } catch (err) {
+    if (skipOptional(a, err)) continue;
     err.message = `${a.type} "${a.target}" (${a.selector || 'no selector'}): ${err.message}`;
     throw err;
   }
@@ -804,15 +1166,25 @@ writeFileSync(join(runDir, 'clips', `${sceneId}.events.json`),
 const size = statSync(outPath).size;
 if (!size) { console.error('record_scene: empty recording'); process.exit(4); }
 console.log(`record_scene: wrote ${outPath} (${size} bytes, ${width * scale}x${height * scale})`);
+if (cfg.block_writes && !isFixture) {
+  console.log(`record_scene: block_writes — ${blockedWrites.length} write request(s) aborted in scene ${sceneId}` +
+    (blockedWrites.length ? `: ${[...new Set(blockedWrites)].slice(0, 6).join('; ')}` : ''));
+  blockedWrites.length = 0;
+}
 } catch (err) {
-  // Evidence before exit: what the page looked like when the action failed.
+  // Evidence before exit: what the page looked like when the action failed
+  // (redaction and display rewrites still apply to the screenshot).
   const shot = join(runDir, 'clips', `${sceneId}.error.png`);
   console.error(`record_scene: scene ${sceneId} FAILED: ${String(err.message || err).split('\n')[0].slice(0, 200)}`);
   try { await page.screenshot({ path: shot }); console.error(`record_scene: page state saved to ${shot}`); } catch { /* page gone */ }
+  try {
+    const { where, buttons } = await describeScreen(page);
+    console.error(`record_scene: failed on ${where || '(unknown page)'}; visible buttons: ${JSON.stringify(buttons)}`);
+  } catch { /* page gone */ }
   if (capturing) { try { await page.screencast.stop(); } catch { /* ignore */ } capturing = false; }
-  try { await browser.close(); } catch { /* ignore */ }
+  try { await closeBrowser(); } catch { /* ignore */ }
   process.exit(1);
 }
 } // end per-scene loop
 
-await browser.close();
+await closeBrowser();

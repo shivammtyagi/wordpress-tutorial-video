@@ -28,12 +28,24 @@
       <p>Enable XML sitemaps for your site.</p>
       <button class="toggle" id="enable-toggle">Enable Sitemap</button>
     </div>
+    <!-- widgets for the select / paste / dblclick / rewrite / redaction scenarios -->
+    <div id="widgets" style="margin-top:24px">
+      <select id="priority"><option value="low">Low</option><option value="high">High</option></select>
+      <input id="code-field" type="text" placeholder="Paste the Jane Smith code">
+      <code id="shortcode">[demo_shortcode]</code>
+      <p>Signed in as <a id="owner" href="https://example-garden.com/author/jane" title="Jane Smith's profile">Jane Smith</a>
+         <img id="avatar" alt="Jane Smith" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" width="24" height="24"></p>
+      <div id="account-chip"><div id="account-email">jane.smith@example-garden.com</div><div id="account-plan">Pro plan</div></div>
+      <textarea id="notes">Jane Smith wrote this draft</textarea>
+    </div>
   </div>
   <script>
     document.getElementById('sitemaps-link').addEventListener('click', (e) => {
       e.preventDefault();
       document.getElementById('panel').classList.add('show');
     });
+    document.getElementById('code-field').addEventListener('input', (e) => { e.target.dataset.inputs = String(Number(e.target.dataset.inputs || 0) + 1); });
+    document.getElementById('shortcode').addEventListener('dblclick', (e) => { e.target.dataset.dbl = '1'; });
     document.getElementById('enable-toggle').addEventListener('click', (e) => {
       e.target.textContent = 'Sitemap Enabled ✓';
       e.target.style.background = '#198754';

@@ -124,3 +124,35 @@ def test_setup_cmd_must_be_nonempty_string():
     doc = copy.deepcopy(VALID)
     doc["scenes"][0]["setup_cmd"] = "   "
     assert any("setup_cmd" in e for e in schema.validate_script(doc, discovered=False))
+
+
+def test_select_requires_option_label_and_selector():
+    sc = _valid_scene()
+    sc["actions"].append({"type": "select", "target": "Priority filter", "selector": None})
+    errs = schema.validate_script(_valid_script(sc), discovered=True)
+    assert any("text" in e for e in errs) and any("selector" in e for e in errs)
+
+
+def test_select_paste_dblclick_are_valid_actions():
+    sc = _valid_scene()
+    sc["actions"] += [
+        {"type": "select", "target": "Priority filter", "selector": "#prio", "text": "High"},
+        {"type": "paste", "target": "Verification code field", "selector": "#code", "text": "abc123"},
+        {"type": "dblclick", "target": "the shortcode", "selector": "code.sc", "optional": True},
+    ]
+    assert schema.validate_script(_valid_script(sc), discovered=True) == []
+
+
+def test_paste_requires_text():
+    sc = _valid_scene()
+    sc["actions"].append({"type": "paste", "target": "Code field", "selector": "#code"})
+    errs = schema.validate_script(_valid_script(sc), discovered=True)
+    assert any("text" in e for e in errs)
+
+
+def test_optional_must_be_boolean():
+    sc = _valid_scene()
+    sc["actions"].append({"type": "click", "target": "Account chooser", "selector": "#acct",
+                          "optional": "yes"})
+    errs = schema.validate_script(_valid_script(sc), discovered=True)
+    assert any("optional" in e for e in errs)
