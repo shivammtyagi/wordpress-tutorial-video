@@ -369,6 +369,19 @@ async function login(page) {
       page.click('#wp-submit'),
     ]);
   }
+  // WordPress asks every administrator to confirm the site's admin email every
+  // six months, on a screen that sits between the login form and wp-admin.
+  // "Remind me later" postpones it without changing any setting.
+  if (/action=confirm_admin_email/.test(page.url())) {
+    const later = page.locator('.admin-email__actions-secondary a').first();
+    if (await later.count()) {
+      console.error('record_scene: postponing the "confirm admin email" screen (Remind me later)');
+      await Promise.all([
+        page.waitForURL(/\/wp-admin\//, { timeout: 15000 }).catch(() => {}),
+        later.click(),
+      ]);
+    }
+  }
   const inAdmin = /\/wp-admin\//.test(page.url()) ||
     (await page.locator('body.wp-admin').count()) > 0;
   if (!inAdmin) {
@@ -687,6 +700,15 @@ page.on('pageerror', (e) => console.error(`record_scene: page error: ${String(e.
 // scene created on camera). Runs before login, off camera. The script author
 // writes it — never derive it from fetched documentation text.
 // In a chain only the FIRST scene's hook runs (the page persists after that).
+// A chain runs only its FIRST scene's setup_cmd. A later scene that declares a
+// different one expects a state this chain will never seed — say so up front,
+// before any recording time is spent.
+const unseeded = scenes.slice(1).filter((s) => s.setup_cmd && s.setup_cmd !== scenes[0].setup_cmd);
+if (unseeded.length) {
+  console.error(`record_scene: WARNING — scene(s) ${unseeded.map((s) => s.id).join(', ')} declare a setup_cmd `
+    + `that differs from scene ${scenes[0].id}'s. A chain runs only its first scene's setup_cmd, so that state `
+    + `will NOT be seeded. Start a new chain at scene ${unseeded[0].id} (--scene-ids ${unseeded[0].id},…).`);
+}
 if (scenes[0].setup_cmd) {
   console.log(`record_scene: setup_cmd → ${scenes[0].setup_cmd}`);
   execSync(scenes[0].setup_cmd, { stdio: 'inherit', shell: '/bin/zsh' });
