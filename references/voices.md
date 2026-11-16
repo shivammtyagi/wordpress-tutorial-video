@@ -204,6 +204,22 @@ Per-scene rate: a scene may carry `"tts_speed": 0.88` to slow just that scene
    as "up-plugin" while the plain word reads fine. Probe every new entry
    (synthesize + transcribe) and only keep entries that fix a real misread.
    If the audio gate keeps flagging a term, add a lexicon entry.
+   **Never start an IPA entry with a stress mark** (`ˈ`/`ˌ`): Kokoro writes the
+   mark directly before the stressed vowel, and an entry that opens with one
+   can come out with a stray sound before the word ("the XML ˈsaɪtmæp" →
+   "XML is sitemap"; that is what happened to `plugin` above). Put the mark
+   after the opening consonants: `sˈaɪtmæp`, `plˈʌɡɪn`. Probed on five words:
+   the consonant-first spelling transcribed exactly like the plain word every
+   time, the mark-first spelling drifted on two.
+4. **Comma pauses (Kokoro, optional step 5c).** Kokoro sometimes leaves only
+   0.08s after a comma, which runs a list together. `scripts/comma_pauses.py
+   --run-dir <d>` pads the silence after each comma'd word to `comma_pause_s`
+   (default 0.35s), placing it in the quietest part of the existing gap so no
+   speech is cut. Run it after `verify_scenes.py` (it needs the word timings),
+   then run `verify_scenes.py` again; do not run `trim_audio.py` afterwards.
+   It is safe to repeat (a comma is never padded twice) and it keeps the
+   ElevenLabs engine's word timings in step, though premium voices rarely
+   need it.
 
 ## Upgrade: Chatterbox (expressive / cloned voice — opt-in, FOSS)
 
